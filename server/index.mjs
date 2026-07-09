@@ -1833,8 +1833,13 @@ const getOpenWrtLanScanTargets = (addresses = getLocalPrivateIpv4Interfaces()) =
 const OPENWRT_WEB_DISCOVERY_PORTS = [80, 8080, 443]
 const OPENWRT_SSH_DISCOVERY_PORTS = [22, 2222]
 const CLASH_CONTROLLER_DISCOVERY_PORTS = [9090, 9091, 9092, 9093, 9097, 19090, 19091]
+const OPENWRT_DISCOVERY_TCP_TIMEOUT_MS = 900
 
-const checkTcpPort = (hostValue, portValue, timeoutMs = 450) => {
+const getOpenWrtDiscoveryConcurrency = (targetCount) => {
+  return targetCount > 64 ? 16 : 32
+}
+
+const checkTcpPort = (hostValue, portValue, timeoutMs = OPENWRT_DISCOVERY_TCP_TIMEOUT_MS) => {
   return new Promise((resolve) => {
     const socket = new Socket()
     let settled = false
@@ -1989,7 +1994,7 @@ const discoverOpenWrtLanHosts = async (options = {}) => {
   const scannedAt = Date.now()
   const results = await runWithConcurrency(
     targets,
-    options.concurrency || 64,
+    options.concurrency || getOpenWrtDiscoveryConcurrency(targets.length),
     detectOpenWrtHostCandidate,
   )
   const candidates = results
@@ -4943,6 +4948,7 @@ export {
   extractNikkiYamlConfigPathsFromProcessList as extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromText as extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUci as extractRemoteYamlConfigPathsFromUciForTesting,
+  getOpenWrtDiscoveryConcurrency as getOpenWrtDiscoveryConcurrencyForTesting,
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,

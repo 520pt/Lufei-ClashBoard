@@ -25,6 +25,7 @@ const {
   extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUciForTesting,
+  getOpenWrtDiscoveryConcurrencyForTesting,
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
   getRequestAccessAuthStatusForTesting,
@@ -218,6 +219,13 @@ test('OpenWrt LAN discovery rejects public or too large custom subnet', () => {
     () => getOpenWrtLanScanTargetsFromSubnetForTesting('10.0.0.0/22'),
     /最多扫描 512 个地址/,
   )
+})
+
+test('OpenWrt LAN discovery lowers concurrency for large subnets', () => {
+  assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(1), 32)
+  assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(32), 32)
+  assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(254), 16)
+  assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(510), 16)
 })
 
 test('custom rule YAML apply inserts provider, rule and proxy group without duplicates', () => {
