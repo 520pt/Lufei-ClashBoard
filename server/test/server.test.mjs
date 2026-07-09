@@ -19,6 +19,7 @@ const serverModuleUrl = new URL(`./../index.mjs?test=${Date.now()}`, import.meta
 const {
   addCustomRule,
   applyCustomRuleProviderToYamlContentForTesting,
+  buildPublicCustomRuleUrlForTesting,
   buildCustomRuleSnippets,
   clashControllerDiscoveryPortsForTesting,
   createAccessSessionTokenForTesting,
@@ -285,6 +286,30 @@ test('OpenWrt LAN discovery requires confirmed OpenWrt web signal', () => {
       score: 88,
     }),
     true,
+  )
+})
+
+test('custom rule public URL replaces loopback host with matching LAN address', () => {
+  assert.equal(
+    buildPublicCustomRuleUrlForTesting({
+      protocol: 'http',
+      hostHeader: '127.0.0.1:2048',
+      fileName: 'ziyong.list',
+      openWrtHost: '10.0.0.18',
+      localAddresses: ['192.168.3.88', '10.0.0.11'],
+    }),
+    'http://10.0.0.11:2048/ziyong.list',
+  )
+
+  assert.equal(
+    buildPublicCustomRuleUrlForTesting({
+      protocol: 'http',
+      hostHeader: '10.0.0.11:2048',
+      fileName: 'ziyong.list',
+      openWrtHost: '10.0.0.18',
+      localAddresses: ['10.0.0.11'],
+    }),
+    'http://10.0.0.11:2048/ziyong.list',
   )
 })
 

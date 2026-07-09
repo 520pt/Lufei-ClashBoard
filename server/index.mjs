@@ -575,6 +575,71 @@ const buildCustomRuleSnippets = (ruleUrl) => {
   }
 }
 
+const isLoopbackPublicHost = (hostValue) => {
+  const normalizedHost = String(hostValue || '')
+    .trim()
+    .toLowerCase()
+
+  return (
+    normalizedHost === 'localhost' ||
+    normalizedHost === '127.0.0.1' ||
+    normalizedHost === '0.0.0.0' ||
+    normalizedHost === '::1' ||
+    normalizedHost === '[::1]'
+  )
+}
+
+const getIpv4Prefix = (address) => {
+  const parts = parseIpv4Address(address)
+
+  if (!parts) {
+    return ''
+  }
+
+  return parts.slice(0, 3).join('.')
+}
+
+const selectPublicCustomRuleHost = ({ hostHeader, openWrtHost, localAddresses } = {}) => {
+  const headerValue = String(hostHeader || '').trim()
+  const parsedHost = headerValue ? new URL(`http://${headerValue}`).hostname : ''
+
+  if (parsedHost && !isLoopbackPublicHost(parsedHost)) {
+    return parsedHost
+  }
+
+  const addresses = Array.isArray(localAddresses) ? localAddresses : getLocalPrivateIpv4Interfaces()
+  const openWrtPrefix = getIpv4Prefix(openWrtHost)
+
+  if (openWrtPrefix) {
+    const matchedAddress = addresses.find((address) => getIpv4Prefix(address) === openWrtPrefix)
+
+    if (matchedAddress) {
+      return matchedAddress
+    }
+  }
+
+  return addresses[0] || parsedHost || '127.0.0.1'
+}
+
+const buildPublicCustomRuleUrl = ({
+  protocol = 'http',
+  hostHeader,
+  fileName = DEFAULT_CUSTOM_RULE_FILE_NAME,
+  openWrtHost = '',
+  localAddresses,
+} = {}) => {
+  const headerValue = String(hostHeader || '').trim()
+  const parsed = new URL(`http://${headerValue || `127.0.0.1:${port}`}`)
+  const publicHost = selectPublicCustomRuleHost({
+    hostHeader: headerValue,
+    openWrtHost,
+    localAddresses,
+  })
+  const publicPort = parsed.port ? `:${parsed.port}` : ''
+
+  return `${protocol}://${publicHost}${publicPort}/${fileName}`
+}
+
 const normalizeYamlInlineValue = (value, fallback) => {
   const normalizedValue = String(value || '')
     .trim()
@@ -4452,13 +4517,20 @@ app.post('/api/openwrt-rule-source/apply-custom', async (req, res) => {
     const settings = readCustomRulesSettings()
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'http'
     const hostHeader = req.get('host') || `127.0.0.1:${port}`
-    const ruleUrl = normalizeYamlInlineValue(
-      req.body?.ruleUrl,
-      `${protocol}://${hostHeader}/${settings.fileName}`,
-    )
+    const sshConfig = readOpenWrtRuleSourceSshConfig()
+    const publicRuleUrl = buildPublicCustomRuleUrl({
+      protocol,
+      hostHeader,
+      fileName: settings.fileName,
+      openWrtHost: sshConfig.host,
+    })
+    const ruleUrl = normalizeYamlInlineValue(req.body?.ruleUrl, publicRuleUrl)
     const result = await applyCustomRuleProviderToOpenWrtYaml({ ruleUrl })
 
-    res.json(result)
+    res.json({
+      ...result,
+      ruleUrl,
+    })
   } catch (error) {
     res.status(500).json({
       message: getErrorMessage(error),
@@ -4810,7 +4882,12 @@ app.get('/api/custom-rules', (req, res) => {
   const settings = readCustomRulesSettings()
   const protocol = req.get('x-forwarded-proto') || req.protocol || 'http'
   const hostHeader = req.get('host') || `127.0.0.1:${port}`
-  const ruleUrl = `${protocol}://${hostHeader}/${settings.fileName}`
+  const ruleUrl = buildPublicCustomRuleUrl({
+    protocol,
+    hostHeader,
+    fileName: settings.fileName,
+    openWrtHost: readOpenWrtRuleSourceSshConfig().host,
+  })
 
   res.setHeader('Cache-Control', 'no-store')
   res.json({
@@ -5018,6 +5095,7 @@ export {
   app,
   applyCustomRuleProviderToYamlContent as applyCustomRuleProviderToYamlContentForTesting,
   buildCustomRuleSnippets,
+  buildPublicCustomRuleUrl as buildPublicCustomRuleUrlForTesting,
   CLASH_CONTROLLER_DISCOVERY_PORTS as clashControllerDiscoveryPortsForTesting,
   createAccessSessionToken as createAccessSessionTokenForTesting,
   db,
