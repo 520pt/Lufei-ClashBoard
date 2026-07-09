@@ -1893,6 +1893,64 @@ const fetchTextWithTimeout = async (url, timeoutMs = 900) => {
   }
 }
 
+const getHeaderText = (headers, name) => {
+  const targetName = String(name || '').toLowerCase()
+  const entry = Object.entries(headers || {}).find(([key]) => key.toLowerCase() === targetName)
+
+  if (!entry) {
+    return ''
+  }
+
+  const value = entry[1]
+
+  return Array.isArray(value) ? value.join(' ') : String(value || '')
+}
+
+const getOpenWrtHttpSignals = ({ text = '', headers = {} } = {}) => {
+  const httpText = String(text || '').toLowerCase()
+  const serverHeader = getHeaderText(headers, 'server').toLowerCase()
+  const hasExcludedRouterHint =
+    httpText.includes('小米路由器') ||
+    httpText.includes('miwifi') ||
+    httpText.includes('xiaomi') ||
+    httpText.includes('mi router')
+  const hasOpenWrtHint =
+    !hasExcludedRouterHint &&
+    (httpText.includes('openwrt') ||
+      httpText.includes('luci') ||
+      serverHeader.includes('openwrt') ||
+      serverHeader.includes('uhttpd'))
+
+  return {
+    hasOpenWrtHint,
+    hasExcludedRouterHint,
+  }
+}
+
+const isLikelyClashControllerResult = ({ status = 0, headers = {}, text = '' } = {}) => {
+  const serverHeader = getHeaderText(headers, 'server').toLowerCase()
+  const authHeader = getHeaderText(headers, 'www-authenticate').toLowerCase()
+  const responseText = String(text || '').toLowerCase()
+
+  if (
+    serverHeader.includes('transmission') ||
+    authHeader.includes('transmission') ||
+    responseText.includes('transmission')
+  ) {
+    return false
+  }
+
+  if (status === 401 || status === 403) {
+    return true
+  }
+
+  return (
+    responseText.includes('"version"') ||
+    responseText.includes('mihomo') ||
+    responseText.includes('clash')
+  )
+}
+
 const getOpenWrtWebUrl = (hostValue, portValue, pathname = '/') => {
   if (portValue === 443) {
     return `https://${hostValue}${pathname}`
@@ -1905,14 +1963,29 @@ const getOpenWrtWebUrl = (hostValue, portValue, pathname = '/') => {
   return `http://${hostValue}:${portValue}${pathname}`
 }
 
+const getVerifiedClashControllerPorts = async (hostValue, ports) => {
+  const results = await Promise.all(
+    ports.map(async (portValue) => {
+      const result = await fetchTextWithTimeout(getOpenWrtWebUrl(hostValue, portValue, '/version'))
+
+      return isLikelyClashControllerResult(result) ? portValue : null
+    }),
+  )
+
+  return results.filter(Boolean)
+}
+
 const detectOpenWrtHostCandidate = async (hostValue) => {
-  const [openWebPorts, openSshPorts, openControllerPorts] = await Promise.all([
+  const [openWebPorts, openSshPorts, tcpControllerPorts] = await Promise.all([
     getOpenPorts(hostValue, OPENWRT_WEB_DISCOVERY_PORTS),
     getOpenPorts(hostValue, OPENWRT_SSH_DISCOVERY_PORTS),
     getOpenPorts(hostValue, CLASH_CONTROLLER_DISCOVERY_PORTS),
   ])
   const httpOpen = openWebPorts.length > 0
   const sshOpen = openSshPorts.length > 0
+  const openControllerPorts = tcpControllerPorts.length
+    ? await getVerifiedClashControllerPorts(hostValue, tcpControllerPorts)
+    : []
   const controllerOpen = openControllerPorts.length > 0
 
   if (!httpOpen && !sshOpen && !controllerOpen) {
@@ -1935,17 +2008,15 @@ const detectOpenWrtHostCandidate = async (hostValue) => {
     (headers, result) => ({ ...headers, ...result.headers }),
     {},
   )
-  const serverHeader = String(httpHeaders.server || '').toLowerCase()
-  const hasOpenWrtHint =
-    httpText.includes('openwrt') ||
-    httpText.includes('luci') ||
-    serverHeader.includes('openwrt') ||
-    serverHeader.includes('uhttpd')
+  const { hasOpenWrtHint, hasExcludedRouterHint } = getOpenWrtHttpSignals({
+    text: httpText,
+    headers: httpHeaders,
+  })
   const controllerPort = openControllerPorts[0] || 9090
   const score =
     (hasOpenWrtHint ? 80 : 0) + (sshOpen ? 12 : 0) + (httpOpen ? 8 : 0) + (controllerOpen ? 20 : 0)
 
-  if (score < 20) {
+  if ((!hasOpenWrtHint && !controllerOpen) || score < 20) {
     return null
   }
 
@@ -1965,6 +2036,7 @@ const detectOpenWrtHostCandidate = async (hostValue) => {
     controllerPort,
     controllerPorts: openControllerPorts,
     hasOpenWrtHint,
+    hasExcludedRouterHint,
     score,
   }
 }
@@ -4949,9 +5021,11 @@ export {
   extractRemoteYamlConfigPathsFromText as extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUci as extractRemoteYamlConfigPathsFromUciForTesting,
   getOpenWrtDiscoveryConcurrency as getOpenWrtDiscoveryConcurrencyForTesting,
+  getOpenWrtHttpSignals as getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
+  isLikelyClashControllerResult as isLikelyClashControllerResultForTesting,
   makeCustomRule,
   readCustomRuleListText,
   readCustomRules,

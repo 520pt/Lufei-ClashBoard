@@ -26,9 +26,11 @@ const {
   extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUciForTesting,
   getOpenWrtDiscoveryConcurrencyForTesting,
+  getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
   getRequestAccessAuthStatusForTesting,
+  isLikelyClashControllerResultForTesting,
   makeCustomRule,
   readCustomRuleListText,
   readCustomRules,
@@ -226,6 +228,43 @@ test('OpenWrt LAN discovery lowers concurrency for large subnets', () => {
   assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(32), 32)
   assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(254), 16)
   assert.equal(getOpenWrtDiscoveryConcurrencyForTesting(510), 16)
+})
+
+test('OpenWrt LAN discovery excludes Xiaomi router LuCI-like pages', () => {
+  const signals = getOpenWrtHttpSignalsForTesting({
+    text: '<title>小米路由器</title><meta http-equiv="refresh" content="0; url=/cgi-bin/luci/web" />',
+    headers: {
+      server: 'nginx/1.12.2',
+    },
+  })
+
+  assert.equal(signals.hasOpenWrtHint, false)
+  assert.equal(signals.hasExcludedRouterHint, true)
+})
+
+test('OpenWrt LAN discovery excludes Transmission from controller ports', () => {
+  assert.equal(
+    isLikelyClashControllerResultForTesting({
+      status: 401,
+      headers: {
+        server: 'Transmission',
+        'www-authenticate': 'Basic realm="Transmission"',
+      },
+      text: '',
+    }),
+    false,
+  )
+
+  assert.equal(
+    isLikelyClashControllerResultForTesting({
+      status: 401,
+      headers: {
+        vary: 'Origin',
+      },
+      text: '',
+    }),
+    true,
+  )
 })
 
 test('custom rule YAML apply inserts provider, rule and proxy group without duplicates', () => {
