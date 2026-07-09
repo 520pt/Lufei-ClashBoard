@@ -337,7 +337,7 @@ rule-providers:
   const first = applyCustomRuleProviderToYamlContentForTesting(source, {
     providerName: 'LuFei / Custom',
     policyGroup: '路飞',
-    ruleUrl: 'http://10.0.0.10:19527/ziyong.list',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
   })
 
   assert.equal(first.changed, true)
@@ -346,7 +346,7 @@ rule-providers:
   assert.equal(first.addedProxyGroup, true)
   assert.match(
     first.content,
-    /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:19527\/ziyong\.list"\}/,
+    /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"\}/,
   )
   assert.match(first.content, /  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,TEST \/ Domain,Test/)
   assert.match(first.content, /  - \{name: 路飞, <<: \*default\}/)
@@ -354,7 +354,7 @@ rule-providers:
   const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
     providerName: 'LuFei / Custom',
     policyGroup: '路飞',
-    ruleUrl: 'http://10.0.0.10:19527/ziyong.list',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
   })
 
   assert.equal(second.changed, false)

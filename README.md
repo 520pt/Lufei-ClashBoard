@@ -73,7 +73,7 @@ pnpm start
 可以通过环境变量修改：
 
 ```bash
-PORT=19527 pnpm start
+PORT=2048 pnpm start
 ```
 
 ## Docker
@@ -82,7 +82,7 @@ PORT=19527 pnpm start
 docker build -t lufei-clashboard .
 docker run -d \
   --name lufei-clashboard \
-  -p 19527:2048 \
+  -p 2048:2048 \
   -v ./data:/app/data \
   lufei-clashboard
 ```
@@ -90,7 +90,7 @@ docker run -d \
 访问：
 
 ```text
-http://服务器IP:19527
+http://服务器IP:2048
 ```
 
 ## 规则源 SSH 用途
