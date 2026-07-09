@@ -20,6 +20,7 @@ const {
   addCustomRule,
   applyCustomRuleProviderToYamlContentForTesting,
   buildCustomRuleSnippets,
+  clashControllerDiscoveryPortsForTesting,
   createAccessSessionTokenForTesting,
   extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromTextForTesting,
@@ -188,6 +189,13 @@ test('OpenWrt LAN discovery builds private /24 scan targets', () => {
   assert.equal(targets.includes('192.168.3.254'), true)
   assert.equal(targets.includes('192.168.3.88'), false)
   assert.equal(targets.length, 253)
+})
+
+test('OpenWrt LAN discovery scans common Clash controller ports', () => {
+  assert.deepEqual(
+    clashControllerDiscoveryPortsForTesting,
+    [9090, 9091, 9092, 9093, 9097, 19090, 19091],
+  )
 })
 
 test('custom rule YAML apply inserts provider, rule and proxy group without duplicates', () => {

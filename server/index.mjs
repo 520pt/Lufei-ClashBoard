@@ -1720,6 +1720,10 @@ const getOpenWrtLanScanTargets = (addresses = getLocalPrivateIpv4Interfaces()) =
   return [...targets]
 }
 
+const OPENWRT_WEB_DISCOVERY_PORTS = [80, 8080, 443]
+const OPENWRT_SSH_DISCOVERY_PORTS = [22, 2222]
+const CLASH_CONTROLLER_DISCOVERY_PORTS = [9090, 9091, 9092, 9093, 9097, 19090, 19091]
+
 const checkTcpPort = (hostValue, portValue, timeoutMs = 450) => {
   return new Promise((resolve) => {
     const socket = new Socket()
@@ -1737,6 +1741,12 @@ const checkTcpPort = (hostValue, portValue, timeoutMs = 450) => {
     socket.once('error', () => settle(false))
     socket.connect(portValue, hostValue)
   })
+}
+
+const getOpenPorts = async (hostValue, ports) => {
+  const states = await Promise.all(ports.map((portValue) => checkTcpPort(hostValue, portValue)))
+
+  return ports.filter((_portValue, index) => states[index])
 }
 
 const fetchTextWithTimeout = async (url, timeoutMs = 900) => {
@@ -1768,42 +1778,57 @@ const fetchTextWithTimeout = async (url, timeoutMs = 900) => {
   }
 }
 
-const detectOpenWrtHostCandidate = async (hostValue) => {
-  const [httpOpen, sshOpen, controller9090Open, controller9097Open] = await Promise.all([
-    checkTcpPort(hostValue, 80),
-    checkTcpPort(hostValue, 22),
-    checkTcpPort(hostValue, 9090),
-    checkTcpPort(hostValue, 9097),
-  ])
+const getOpenWrtWebUrl = (hostValue, portValue, pathname = '/') => {
+  if (portValue === 443) {
+    return `https://${hostValue}${pathname}`
+  }
 
-  if (!httpOpen && !sshOpen && !controller9090Open && !controller9097Open) {
+  if (portValue === 80) {
+    return `http://${hostValue}${pathname}`
+  }
+
+  return `http://${hostValue}:${portValue}${pathname}`
+}
+
+const detectOpenWrtHostCandidate = async (hostValue) => {
+  const [openWebPorts, openSshPorts, openControllerPorts] = await Promise.all([
+    getOpenPorts(hostValue, OPENWRT_WEB_DISCOVERY_PORTS),
+    getOpenPorts(hostValue, OPENWRT_SSH_DISCOVERY_PORTS),
+    getOpenPorts(hostValue, CLASH_CONTROLLER_DISCOVERY_PORTS),
+  ])
+  const httpOpen = openWebPorts.length > 0
+  const sshOpen = openSshPorts.length > 0
+  const controllerOpen = openControllerPorts.length > 0
+
+  if (!httpOpen && !sshOpen && !controllerOpen) {
     return null
   }
 
-  const luciResult = httpOpen
-    ? await fetchTextWithTimeout(`http://${hostValue}/cgi-bin/luci`)
-    : null
-  const rootResult =
-    httpOpen && (!luciResult?.ok || luciResult.status === 404)
-      ? await fetchTextWithTimeout(`http://${hostValue}/`)
-      : null
-  const httpText = `${luciResult?.text || ''}\n${rootResult?.text || ''}`.toLowerCase()
-  const httpHeaders = {
-    ...(luciResult?.headers || {}),
-    ...(rootResult?.headers || {}),
-  }
+  const webResults = httpOpen
+    ? await Promise.all(
+        openWebPorts.flatMap((portValue) => [
+          fetchTextWithTimeout(getOpenWrtWebUrl(hostValue, portValue, '/cgi-bin/luci')),
+          fetchTextWithTimeout(getOpenWrtWebUrl(hostValue, portValue, '/')),
+        ]),
+      )
+    : []
+  const httpText = webResults
+    .map((result) => result.text || '')
+    .join('\n')
+    .toLowerCase()
+  const httpHeaders = webResults.reduce(
+    (headers, result) => ({ ...headers, ...result.headers }),
+    {},
+  )
   const serverHeader = String(httpHeaders.server || '').toLowerCase()
   const hasOpenWrtHint =
     httpText.includes('openwrt') ||
     httpText.includes('luci') ||
     serverHeader.includes('openwrt') ||
     serverHeader.includes('uhttpd')
-  const controllerPort = controller9090Open ? 9090 : controller9097Open ? 9097 : 9090
+  const controllerPort = openControllerPorts[0] || 9090
   const score =
-    (hasOpenWrtHint ? 80 : 0) +
-    (sshOpen ? 12 : 0) +
-    (httpOpen ? 8 : 0) +
-    (controller9090Open || controller9097Open ? 20 : 0)
+    (hasOpenWrtHint ? 80 : 0) + (sshOpen ? 12 : 0) + (httpOpen ? 8 : 0) + (controllerOpen ? 20 : 0)
 
   if (score < 20) {
     return null
@@ -1814,13 +1839,16 @@ const detectOpenWrtHostCandidate = async (hostValue) => {
     label: hasOpenWrtHint ? `OpenWrt ${hostValue}` : `疑似 OpenWrt ${hostValue}`,
     protocol: 'http',
     port: String(controllerPort),
-    ruleSourceSshPort: sshOpen ? '22' : '',
+    ruleSourceSshPort: sshOpen ? String(openSshPorts[0]) : '',
     ruleSourceSshUsername: 'root',
     ruleSourcePlugin: 'auto',
     httpOpen,
     sshOpen,
-    controllerOpen: controller9090Open || controller9097Open,
+    openWebPorts,
+    openSshPorts,
+    controllerOpen,
     controllerPort,
+    controllerPorts: openControllerPorts,
     hasOpenWrtHint,
     score,
   }
@@ -4790,6 +4818,7 @@ export {
   app,
   applyCustomRuleProviderToYamlContent as applyCustomRuleProviderToYamlContentForTesting,
   buildCustomRuleSnippets,
+  CLASH_CONTROLLER_DISCOVERY_PORTS as clashControllerDiscoveryPortsForTesting,
   createAccessSessionToken as createAccessSessionTokenForTesting,
   db,
   extractNikkiYamlConfigPathsFromProcessList as extractNikkiYamlConfigPathsFromProcessListForTesting,
