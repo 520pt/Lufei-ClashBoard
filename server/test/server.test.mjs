@@ -39,6 +39,7 @@ const {
   resolveOpenClashConfigPathFromUciForTesting,
   searchRuleProviderCache,
   seedRuleProviderCacheForTesting,
+  shouldIncludeOpenWrtCandidateForTesting,
   shutdownServer,
   updateCustomRulesSettings,
 } = await import(serverModuleUrl.href)
@@ -262,6 +263,26 @@ test('OpenWrt LAN discovery excludes Transmission from controller ports', () => 
         vary: 'Origin',
       },
       text: '',
+    }),
+    true,
+  )
+})
+
+test('OpenWrt LAN discovery requires confirmed OpenWrt web signal', () => {
+  assert.equal(
+    shouldIncludeOpenWrtCandidateForTesting({
+      hasOpenWrtHint: false,
+      controllerOpen: true,
+      score: 40,
+    }),
+    false,
+  )
+
+  assert.equal(
+    shouldIncludeOpenWrtCandidateForTesting({
+      hasOpenWrtHint: true,
+      controllerOpen: false,
+      score: 88,
     }),
     true,
   )

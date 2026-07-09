@@ -1975,6 +1975,10 @@ const getVerifiedClashControllerPorts = async (hostValue, ports) => {
   return results.filter(Boolean)
 }
 
+const shouldIncludeOpenWrtCandidate = ({ hasOpenWrtHint = false, score = 0 } = {}) => {
+  return hasOpenWrtHint && score >= 20
+}
+
 const detectOpenWrtHostCandidate = async (hostValue) => {
   const [openWebPorts, openSshPorts, tcpControllerPorts] = await Promise.all([
     getOpenPorts(hostValue, OPENWRT_WEB_DISCOVERY_PORTS),
@@ -2016,7 +2020,7 @@ const detectOpenWrtHostCandidate = async (hostValue) => {
   const score =
     (hasOpenWrtHint ? 80 : 0) + (sshOpen ? 12 : 0) + (httpOpen ? 8 : 0) + (controllerOpen ? 20 : 0)
 
-  if ((!hasOpenWrtHint && !controllerOpen) || score < 20) {
+  if (!shouldIncludeOpenWrtCandidate({ hasOpenWrtHint, score })) {
     return null
   }
 
@@ -5036,6 +5040,7 @@ export {
   searchRuleProviderCache,
   seedRuleProviderCacheForTesting,
   server,
+  shouldIncludeOpenWrtCandidate as shouldIncludeOpenWrtCandidateForTesting,
   shutdownServer,
   startServer,
   updateCustomRulesSettings,
