@@ -1,0 +1,276 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test, { after } from 'node:test'
+
+const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ange-clashboard-test-'))
+const dbPath = path.join(tempDir, 'zashboard.sqlite')
+
+process.env.ZASHBOARD_DB_PATH = dbPath
+delete process.env.ZASHBOARD_OPENWRT_SSH_HOST
+delete process.env.ZASHBOARD_OPENWRT_SSH_PORT
+delete process.env.ZASHBOARD_OPENWRT_SSH_USER
+delete process.env.ZASHBOARD_OPENWRT_SSH_USERNAME
+delete process.env.ZASHBOARD_OPENWRT_SSH_PASSWORD
+delete process.env.ZASHBOARD_RULE_SOURCE_PLUGIN
+
+const serverModuleUrl = new URL(`./../index.mjs?test=${Date.now()}`, import.meta.url)
+const {
+  addCustomRule,
+  applyCustomRuleProviderToYamlContentForTesting,
+  buildCustomRuleSnippets,
+  createAccessSessionTokenForTesting,
+  extractNikkiYamlConfigPathsFromProcessListForTesting,
+  extractRemoteYamlConfigPathsFromTextForTesting,
+  extractRemoteYamlConfigPathsFromUciForTesting,
+  getOpenWrtLanScanTargetsForTesting,
+  getRequestAccessAuthStatusForTesting,
+  makeCustomRule,
+  readCustomRuleListText,
+  readCustomRules,
+  readCustomRulesSettings,
+  replaceSnapshot,
+  resolveOpenClashConfigPathFromUciForTesting,
+  searchRuleProviderCache,
+  seedRuleProviderCacheForTesting,
+  shutdownServer,
+  updateCustomRulesSettings,
+} = await import(serverModuleUrl.href)
+
+after(async () => {
+  await shutdownServer().catch(() => {})
+  await fs.rm(tempDir, { recursive: true, force: true })
+})
+
+test('service auth state is enforced from persisted settings', () => {
+  replaceSnapshot({
+    'config/access-password-enabled': 'true',
+    'config/access-password': 'test-secret',
+  })
+
+  assert.deepEqual(
+    getRequestAccessAuthStatusForTesting({
+      headers: {},
+    }),
+    {
+      enabled: true,
+      authenticated: false,
+    },
+  )
+
+  assert.deepEqual(
+    getRequestAccessAuthStatusForTesting({
+      headers: {
+        cookie: `ange_clashboard_access_session=${createAccessSessionTokenForTesting('test-secret')}`,
+      },
+    }),
+    {
+      enabled: true,
+      authenticated: true,
+    },
+  )
+})
+
+test('rule provider search returns cached matches', async () => {
+  seedRuleProviderCacheForTesting([
+    {
+      name: 'streaming',
+      behavior: 'domain',
+      format: 'text',
+      url: 'https://example.test/streaming.txt',
+      body: `DOMAIN-SUFFIX,netflix.com
+DOMAIN,api.openai.com
+`,
+    },
+  ])
+
+  const payload = await searchRuleProviderCache('www.netflix.com')
+
+  assert.equal(payload.totalProviders, 1)
+  assert.equal(payload.cachedProviders, 1)
+  assert.equal(payload.matches.length, 1)
+  assert.equal(payload.matches[0].name, 'streaming')
+  assert.equal(payload.matches[0].totalRules, 2)
+  assert.deepEqual(payload.matches[0].matches[0], {
+    line: 1,
+    value: 'netflix.com',
+    mode: 'suffix',
+    raw: 'DOMAIN-SUFFIX,netflix.com',
+  })
+})
+
+test('rule provider search does not require live OpenWrt SSH config', async () => {
+  seedRuleProviderCacheForTesting([
+    {
+      name: 'streaming',
+      behavior: 'domain',
+      format: 'text',
+      url: 'https://example.test/streaming.txt',
+      body: `DOMAIN-SUFFIX,netflix.com
+DOMAIN,api.openai.com
+`,
+    },
+  ])
+
+  const payload = await searchRuleProviderCache('www.netflix.com')
+
+  assert.equal(payload.cachedProviders, 1)
+  assert.equal(payload.matches.length, 1)
+  assert.equal(payload.matches[0].name, 'streaming')
+  assert.equal(payload.matches[0].url, 'https://example.test/streaming.txt')
+})
+
+test('OpenClash config_path is resolved from UCI config without guessing provider URLs', () => {
+  assert.equal(
+    resolveOpenClashConfigPathFromUciForTesting(
+      `
+config openclash 'config'
+  option config_path '/etc/openclash/config/live.yaml'
+`,
+    ),
+    '/etc/openclash/config/live.yaml',
+  )
+
+  assert.equal(
+    resolveOpenClashConfigPathFromUciForTesting(
+      `
+config openclash 'config'
+  option config_path 'active.yaml'
+`,
+      {
+        configDir: '/tmp/openclash/config',
+        uciConfigPath: '/tmp/openclash/uci',
+      },
+    ),
+    '/tmp/openclash/config/active.yaml',
+  )
+})
+
+test('Nikki YAML paths are extracted from remote process and UCI content', () => {
+  assert.deepEqual(
+    extractRemoteYamlConfigPathsFromTextForTesting(
+      `1234 root /usr/bin/mihomo -d /etc/nikki/run -f /tmp/nikki/live/config.yaml
+5678 root /usr/bin/other --config=/etc/example/ignored.json
+`,
+    ),
+    ['/tmp/nikki/live/config.yaml'],
+  )
+
+  assert.deepEqual(
+    extractRemoteYamlConfigPathsFromUciForTesting(
+      `
+config nikki 'config'
+  option profile '/etc/nikki/profiles/home.yaml'
+  list include "/tmp/nikki/rules/current.yml"
+`,
+    ),
+    ['/etc/nikki/profiles/home.yaml', '/tmp/nikki/rules/current.yml'],
+  )
+})
+
+test('Nikki process detection ignores OpenClash-owned YAML paths', () => {
+  assert.deepEqual(
+    extractNikkiYamlConfigPathsFromProcessListForTesting(
+      `1234 root /usr/bin/mihomo -d /etc/openclash/core -f /etc/openclash/clash-fallback-std-cn-one.yaml
+5678 root /usr/bin/mihomo -d /etc/nikki/run -f /tmp/nikki/live/config.yaml
+9012 root /usr/bin/nikki --config=/tmp/custom-nikki.yaml
+`,
+    ),
+    ['/tmp/nikki/live/config.yaml', '/tmp/custom-nikki.yaml'],
+  )
+})
+
+test('OpenWrt LAN discovery builds private /24 scan targets', () => {
+  const targets = getOpenWrtLanScanTargetsForTesting(['192.168.3.88'])
+
+  assert.equal(targets.includes('192.168.3.1'), true)
+  assert.equal(targets.includes('192.168.3.254'), true)
+  assert.equal(targets.includes('192.168.3.88'), false)
+  assert.equal(targets.length, 253)
+})
+
+test('custom rule YAML apply inserts provider, rule and proxy group without duplicates', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - 直连
+
+proxy-groups:
+  - {name: AI, <<: *default}
+  - {name: Test, <<: *default}
+
+rules:
+  - RULE-SET,TEST / Domain,Test
+  - MATCH,其他
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  TEST / Domain: {<<: *class, url: "https://example.test/Check.list"}
+`
+
+  const first = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    policyGroup: '路飞',
+    ruleUrl: 'http://10.0.0.10:19527/ziyong.list',
+  })
+
+  assert.equal(first.changed, true)
+  assert.equal(first.addedProvider, true)
+  assert.equal(first.addedRule, true)
+  assert.equal(first.addedProxyGroup, true)
+  assert.match(
+    first.content,
+    /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:19527\/ziyong\.list"\}/,
+  )
+  assert.match(first.content, /  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,TEST \/ Domain,Test/)
+  assert.match(first.content, /  - \{name: 路飞, <<: \*default\}/)
+
+  const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
+    providerName: 'LuFei / Custom',
+    policyGroup: '路飞',
+    ruleUrl: 'http://10.0.0.10:19527/ziyong.list',
+  })
+
+  assert.equal(second.changed, false)
+  assert.equal(second.content, first.content)
+})
+
+test('custom rules manager generates rules and snippets', () => {
+  replaceSnapshot({})
+
+  assert.deepEqual(readCustomRulesSettings(), {
+    providerName: 'LuFei / Custom',
+    policyGroup: '路飞',
+    fileName: 'ziyong.list',
+  })
+
+  assert.equal(makeCustomRule('Example.COM'), 'DOMAIN-SUFFIX,example.com')
+  assert.equal(makeCustomRule('https://api.example.com/path'), 'DOMAIN-SUFFIX,api.example.com')
+  assert.equal(makeCustomRule('1.2.3.4'), 'IP-CIDR,1.2.3.4/32,no-resolve')
+  assert.equal(makeCustomRule('10.0.0.0/8'), 'IP-CIDR,10.0.0.0/8,no-resolve')
+
+  const first = addCustomRule({ target: 'example.com' })
+  const second = addCustomRule({ target: 'https://example.com/a' })
+  addCustomRule({ target: '1.2.3.4' })
+
+  assert.equal(first.added, true)
+  assert.equal(second.added, false)
+  assert.deepEqual(readCustomRules(), [
+    'DOMAIN-SUFFIX,example.com',
+    'IP-CIDR,1.2.3.4/32,no-resolve',
+  ])
+  assert.equal(
+    readCustomRuleListText(),
+    'DOMAIN-SUFFIX,example.com\nIP-CIDR,1.2.3.4/32,no-resolve\n',
+  )
+
+  updateCustomRulesSettings({ policyGroup: 'lufei' })
+  assert.equal(readCustomRulesSettings().policyGroup, 'lufei')
+  assert.equal(
+    buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').ruleLine,
+    'RULE-SET,LuFei / Custom,lufei',
+  )
+})
