@@ -313,6 +313,19 @@ test('custom rule public URL replaces loopback host with matching LAN address', 
   )
 })
 
+test('custom rule public URL does not expose Docker bridge address', () => {
+  assert.equal(
+    buildPublicCustomRuleUrlForTesting({
+      protocol: 'http',
+      hostHeader: '127.0.0.1:2048',
+      fileName: 'ziyong.list',
+      openWrtHost: '10.0.0.18',
+      localAddresses: ['172.17.0.2'],
+    }),
+    'http://127.0.0.1:2048/ziyong.list',
+  )
+})
+
 test('custom rule YAML apply inserts provider, rule and proxy group without duplicates', () => {
   const source = `default: &default
   type: select

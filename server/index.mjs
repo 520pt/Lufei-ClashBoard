@@ -589,6 +589,12 @@ const isLoopbackPublicHost = (hostValue) => {
   )
 }
 
+const isDockerBridgeIpv4Address = (address) => {
+  const parts = String(address || '').split('.').map((item) => Number(item))
+
+  return parts.length === 4 && parts[0] === 172 && parts[1] === 17
+}
+
 const getIpv4Prefix = (address) => {
   const parts = parseIpv4Address(address)
 
@@ -607,7 +613,10 @@ const selectPublicCustomRuleHost = ({ hostHeader, openWrtHost, localAddresses } 
     return parsedHost
   }
 
-  const addresses = Array.isArray(localAddresses) ? localAddresses : getLocalPrivateIpv4Interfaces()
+  const addresses = (Array.isArray(localAddresses)
+    ? localAddresses
+    : getLocalPrivateIpv4Interfaces()
+  ).filter((address) => !isDockerBridgeIpv4Address(address))
   const openWrtPrefix = getIpv4Prefix(openWrtHost)
 
   if (openWrtPrefix) {

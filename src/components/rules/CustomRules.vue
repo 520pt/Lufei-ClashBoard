@@ -279,11 +279,14 @@ import {
   applyCustomRuleToActiveYamlAPI,
   deleteCustomRuleAPI,
   fetchCustomRulesAPI,
+  reloadConfigsAPI,
   updateCustomRulesSettingsAPI,
   type CustomRulesPayload,
 } from '@/api'
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
 import { showNotification } from '@/helper/notification'
+import { fetchProxies } from '@/store/proxies'
+import { fetchRules } from '@/store/rules'
 import { computed, onMounted, ref } from 'vue'
 
 const customRules = ref<CustomRulesPayload | null>(null)
@@ -408,19 +411,21 @@ const confirmApplyToYaml = async () => {
     const result = await applyCustomRuleToActiveYamlAPI(customRules.value.ruleUrl)
     applyDialogVisible.value = false
 
-    if (!result.changed) {
-      showNotification({
-        content: `当前 YAML 已经包含自定义规则：${result.configPath}`,
-        type: 'alert-info',
-        timeout: 3600,
-      })
-      return
-    }
+    showNotification({
+      content: result.changed
+        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重新加载配置...`
+        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重新加载配置...`,
+      type: result.changed ? 'alert-success' : 'alert-info',
+      timeout: 6000,
+    })
+
+    await reloadConfigsAPI()
+    await Promise.allSettled([fetchProxies(), fetchRules()])
 
     showNotification({
-      content: `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}`,
+      content: '配置已重新加载，策略组和规则列表已刷新',
       type: 'alert-success',
-      timeout: 6000,
+      timeout: 3600,
     })
   } catch (error) {
     showNotification({
