@@ -26,6 +26,7 @@ const {
   extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUciForTesting,
   getOpenWrtLanScanTargetsForTesting,
+  getOpenWrtLanScanTargetsFromSubnetForTesting,
   getRequestAccessAuthStatusForTesting,
   makeCustomRule,
   readCustomRuleListText,
@@ -195,6 +196,27 @@ test('OpenWrt LAN discovery scans common Clash controller ports', () => {
   assert.deepEqual(
     clashControllerDiscoveryPortsForTesting,
     [9090, 9091, 9092, 9093, 9097, 19090, 19091],
+  )
+})
+
+test('OpenWrt LAN discovery builds targets from custom private subnet', () => {
+  assert.deepEqual(getOpenWrtLanScanTargetsFromSubnetForTesting('10.0.0.0/30'), [
+    '10.0.0.1',
+    '10.0.0.2',
+  ])
+
+  assert.deepEqual(getOpenWrtLanScanTargetsFromSubnetForTesting('192.168.3.88'), ['192.168.3.88'])
+})
+
+test('OpenWrt LAN discovery rejects public or too large custom subnet', () => {
+  assert.throws(
+    () => getOpenWrtLanScanTargetsFromSubnetForTesting('8.8.8.0/24'),
+    /只能扫描私有 IPv4 网段/,
+  )
+
+  assert.throws(
+    () => getOpenWrtLanScanTargetsFromSubnetForTesting('10.0.0.0/22'),
+    /最多扫描 512 个地址/,
   )
 })
 

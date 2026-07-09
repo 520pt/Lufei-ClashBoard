@@ -1698,6 +1698,116 @@ const getIpv4Subnet24Prefix = (address) => {
   return parts.slice(0, 3).join('.')
 }
 
+const parseIpv4Address = (address) => {
+  const parts = String(address || '')
+    .trim()
+    .split('.')
+
+  if (parts.length !== 4) {
+    return null
+  }
+
+  const numbers = parts.map((part) => {
+    if (!/^\d{1,3}$/.test(part)) {
+      return NaN
+    }
+
+    return Number(part)
+  })
+
+  if (numbers.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return null
+  }
+
+  return numbers
+}
+
+const ipv4ToNumber = (address) => {
+  const parts = Array.isArray(address) ? address : parseIpv4Address(address)
+
+  if (!parts) {
+    return null
+  }
+
+  return parts.reduce((value, part) => value * 256 + part, 0)
+}
+
+const numberToIpv4 = (value) => {
+  return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.')
+}
+
+const isPrivateIpv4Address = (address) => {
+  const parts = parseIpv4Address(address)
+
+  if (!parts) {
+    return false
+  }
+
+  return (
+    parts[0] === 10 ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+  )
+}
+
+const getOpenWrtLanScanTargetsFromSubnet = (subnetValue) => {
+  const rawValue = String(subnetValue || '').trim()
+
+  if (!rawValue) {
+    throw new Error('请输入要扫描的 IPv4 网段')
+  }
+
+  const [address, prefixRaw] = rawValue.split('/')
+  const addressNumber = ipv4ToNumber(address)
+
+  if (addressNumber === null) {
+    throw new Error('请输入有效的 IPv4 地址或 CIDR 网段')
+  }
+
+  if (!isPrivateIpv4Address(address)) {
+    throw new Error('只能扫描私有 IPv4 网段')
+  }
+
+  if (prefixRaw === undefined) {
+    return [address.trim()]
+  }
+
+  if (!/^\d{1,2}$/.test(prefixRaw)) {
+    throw new Error('请输入有效的 CIDR 前缀')
+  }
+
+  const prefix = Number(prefixRaw)
+
+  if (prefix < 23 || prefix > 32) {
+    throw new Error('最多扫描 512 个地址，请使用 /23 到 /32 的私有网段')
+  }
+
+  const hostCount = 2 ** (32 - prefix)
+
+  if (hostCount > 512) {
+    throw new Error('最多扫描 512 个地址，请缩小网段范围')
+  }
+
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0
+  const network = (addressNumber & mask) >>> 0
+  const broadcast = network + hostCount - 1
+  const start = prefix <= 30 ? network + 1 : network
+  const end = prefix <= 30 ? broadcast - 1 : broadcast
+  const targets = []
+
+  for (let value = start; value <= end; value += 1) {
+    const target = numberToIpv4(value)
+
+    if (!isPrivateIpv4Address(target)) {
+      throw new Error('只能扫描私有 IPv4 网段')
+    }
+
+    targets.push(target)
+  }
+
+  return targets
+}
+
 const getOpenWrtLanScanTargets = (addresses = getLocalPrivateIpv4Interfaces()) => {
   const targets = new Set()
 
@@ -1872,7 +1982,10 @@ const runWithConcurrency = async (items, limit, worker) => {
 
 const discoverOpenWrtLanHosts = async (options = {}) => {
   const localAddresses = getLocalPrivateIpv4Interfaces()
-  const targets = getOpenWrtLanScanTargets(localAddresses).slice(0, options.limit || 512)
+  const customSubnet = String(options.subnet || '').trim()
+  const targets = customSubnet
+    ? getOpenWrtLanScanTargetsFromSubnet(customSubnet).slice(0, options.limit || 512)
+    : getOpenWrtLanScanTargets(localAddresses).slice(0, options.limit || 512)
   const scannedAt = Date.now()
   const results = await runWithConcurrency(
     targets,
@@ -1885,6 +1998,8 @@ const discoverOpenWrtLanHosts = async (options = {}) => {
 
   return {
     ok: true,
+    mode: customSubnet ? 'custom' : 'local',
+    subnet: customSubnet,
     localAddresses,
     scannedCount: targets.length,
     durationMs: Date.now() - scannedAt,
@@ -4271,11 +4386,15 @@ app.post('/api/openwrt-rule-source/apply-custom', async (req, res) => {
   }
 })
 
-app.get('/api/openwrt-lan/discover', async (_req, res) => {
+app.get('/api/openwrt-lan/discover', async (req, res) => {
   try {
-    res.json(await discoverOpenWrtLanHosts())
+    res.json(
+      await discoverOpenWrtLanHosts({
+        subnet: typeof req.query?.subnet === 'string' ? req.query.subnet : '',
+      }),
+    )
   } catch (error) {
-    res.status(500).json({
+    res.status(400).json({
       message: getErrorMessage(error),
     })
   }
@@ -4825,6 +4944,7 @@ export {
   extractRemoteYamlConfigPathsFromText as extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUci as extractRemoteYamlConfigPathsFromUciForTesting,
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
+  getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
   makeCustomRule,
   readCustomRuleListText,

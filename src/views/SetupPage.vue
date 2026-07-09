@@ -91,6 +91,11 @@
 
       <div class="border-base-content/10 flex flex-col gap-3 border-t pt-3">
         <div class="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+          <TextInput
+            class="w-full sm:w-64"
+            v-model.trim="openWrtLanSubnet"
+            placeholder="指定网段，例如 10.0.0.0/24，可留空"
+          />
           <button
             type="button"
             class="btn btn-sm"
@@ -313,6 +318,7 @@ const editingBackendUuid = ref<string>('')
 const isTestingRuleSourceSsh = ref(false)
 const ruleSourceSshStatus = ref('')
 const isDiscoveringOpenWrt = ref(false)
+const openWrtLanSubnet = ref('')
 const openWrtLanStatus = ref('')
 const openWrtLanCandidates = ref<OpenWrtLanCandidate[]>([])
 
@@ -452,11 +458,16 @@ const discoverOpenWrtLan = async () => {
   if (isDiscoveringOpenWrt.value) return
 
   isDiscoveringOpenWrt.value = true
-  openWrtLanStatus.value = '正在扫描局域网，请稍等...'
+  openWrtLanStatus.value = openWrtLanSubnet.value
+    ? `正在扫描 ${openWrtLanSubnet.value}，请稍等...`
+    : '正在扫描局域网，请稍等...'
   openWrtLanCandidates.value = []
 
   try {
-    const response = await fetchServerApi('/api/openwrt-lan/discover', {
+    const query = openWrtLanSubnet.value
+      ? `?subnet=${encodeURIComponent(openWrtLanSubnet.value)}`
+      : ''
+    const response = await fetchServerApi(`/api/openwrt-lan/discover${query}`, {
       method: 'GET',
     })
     const data = (await response.json().catch(() => null)) as {
