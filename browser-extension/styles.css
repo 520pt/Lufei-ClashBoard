@@ -116,6 +116,15 @@ body {
     box-shadow 0.16s ease;
 }
 
+textarea.input {
+  min-height: 52px;
+  resize: vertical;
+}
+
+.target-input {
+  line-height: 1.45;
+}
+
 .input:focus,
 .select:focus {
   border-color: #8771fa;

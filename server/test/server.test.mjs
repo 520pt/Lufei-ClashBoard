@@ -18,6 +18,7 @@ delete process.env.ZASHBOARD_RULE_SOURCE_PLUGIN
 const serverModuleUrl = new URL(`./../index.mjs?test=${Date.now()}`, import.meta.url)
 const {
   addCustomRule,
+  addCustomRules,
   applyCustomRuleProviderToYamlContentForTesting,
   buildPublicCustomRuleUrlForTesting,
   buildCustomRuleSnippets,
@@ -336,14 +337,8 @@ test('OpenWrt SSH connection reveals the Docker host LAN address', () => {
     extractOpenWrtVisibleClientIpv4ForTesting('10.0.0.11 51842 10.0.0.18 22'),
     '10.0.0.11',
   )
-  assert.equal(
-    extractOpenWrtVisibleClientIpv4ForTesting('172.17.0.2 51842 10.0.0.18 22'),
-    '',
-  )
-  assert.equal(
-    extractOpenWrtVisibleClientIpv4ForTesting('54.208.73.48 51842 10.0.0.18 22'),
-    '',
-  )
+  assert.equal(extractOpenWrtVisibleClientIpv4ForTesting('172.17.0.2 51842 10.0.0.18 22'), '')
+  assert.equal(extractOpenWrtVisibleClientIpv4ForTesting('54.208.73.48 51842 10.0.0.18 22'), '')
 })
 
 test('custom rule YAML apply inserts provider, rule and proxy group without duplicates', () => {
@@ -787,6 +782,35 @@ test('custom rules manager generates rules and snippets', () => {
     ).proxyGroupLine,
     /name: 自定义-直连, <<: \*default/,
   )
+})
+
+test('custom rules manager adds batch raw rules and plain targets', () => {
+  replaceSnapshot({})
+
+  const batch = addCustomRules({
+    targets: `DOMAIN-KEYWORD,m-team
+DOMAIN-KEYWORD,nicept
+DOMAIN-SUFFIX,cnboy.org
+bookmarkearth.com
+1.1.1.1`,
+    kind: 'auto',
+    policy: 'proxy',
+  })
+
+  assert.equal(batch.addedCount, 5)
+  assert.equal(batch.errorCount, 0)
+  assert.deepEqual(
+    batch.results.map((item) => item.rule),
+    [
+      'DOMAIN-KEYWORD,m-team',
+      'DOMAIN-KEYWORD,nicept',
+      'DOMAIN-SUFFIX,cnboy.org',
+      'DOMAIN-SUFFIX,bookmarkearth.com',
+      'IP-CIDR,1.1.1.1/32,no-resolve',
+    ],
+  )
+  assert.match(readCustomRuleListText('proxy'), /DOMAIN-KEYWORD,m-team/)
+  assert.match(readCustomRuleListText('proxy'), /DOMAIN-SUFFIX,bookmarkearth\.com/)
 })
 
 test('custom rule providers are synced to local rule cache', async () => {

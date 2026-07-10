@@ -573,9 +573,22 @@ export const addCustomRuleAPI = async (
   }
 
   return data as {
-    rule: string
+    rule?: string
     policy: CustomRulePolicy
-    added: boolean
+    added?: boolean
+    results?: Array<{
+      target: string
+      rule: string
+      policy: CustomRulePolicy
+      added: boolean
+    }>
+    errors?: Array<{
+      target: string
+      message: string
+    }>
+    addedCount?: number
+    skippedCount?: number
+    errorCount?: number
     rules: CustomRuleEntry[]
   }
 }

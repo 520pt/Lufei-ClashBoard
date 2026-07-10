@@ -153,7 +153,7 @@
         <div>
           <div class="font-semibold">快速添加规则</div>
           <div class="text-base-content/60 text-xs">
-            支持 example.com、https://example.com/path、1.2.3.4、10.0.0.0/8。
+            支持批量粘贴域名、IP、URL 或 DOMAIN-KEYWORD,m-team 这类 Clash 规则。
           </div>
         </div>
       </div>
@@ -179,10 +179,10 @@
           >
             直连
           </button>
-          <input
+          <textarea
             v-model.trim="target"
-            class="input input-bordered input-sm join-item min-w-0 flex-1"
-            placeholder="输入域名、网址、IP 或 CIDR"
+            class="textarea textarea-bordered textarea-sm join-item min-h-20 min-w-0 flex-1 leading-5"
+            placeholder="输入域名、网址、IP、CIDR 或多行 Clash 规则"
             required
           />
           <button
@@ -618,13 +618,22 @@ const handleAddRule = async () => {
     target.value = ''
     await loadCustomRules()
     const refreshStatus = await refreshCustomRuleProvider(selectedPolicy)
+    const isBatchResult = Array.isArray(result.results)
+    const firstResult = result.results?.[0]
+    const addedCount = result.addedCount ?? (result.added ? 1 : 0)
+    const skippedCount = result.skippedCount ?? (result.added === false ? 1 : 0)
+    const errorCount = result.errorCount ?? 0
+    const batchSummary = isBatchResult
+      ? `新增 ${addedCount} 条，已存在 ${skippedCount} 条${
+          errorCount ? `，失败 ${errorCount} 条` : ''
+        }`
+      : result.added
+        ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule || firstResult?.rule || ''}`
+        : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule || firstResult?.rule || ''}`
+
     showNotification({
-      content: result.added
-        ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule}${getRefreshStatusText(refreshStatus)}`
-        : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule}${getRefreshStatusText(
-            refreshStatus,
-          )}`,
-      type: result.added ? 'alert-success' : 'alert-info',
+      content: `${batchSummary}${getRefreshStatusText(refreshStatus)}`,
+      type: addedCount > 0 ? 'alert-success' : 'alert-info',
       timeout: refreshStatus === 'failed' ? 3200 : 2400,
     })
   } catch (error) {

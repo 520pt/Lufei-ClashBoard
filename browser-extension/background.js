@@ -313,34 +313,50 @@ const normalizeRuleKind = (kind, fallback = 'domain_suffix') => {
   return Object.prototype.hasOwnProperty.call(RULE_KIND_LABELS, normalized) ? normalized : fallback
 }
 
+const isCompleteRuleLine = (value) => /^[A-Z][A-Z0-9-]*\s*,/.test(String(value || '').trim())
+
+const isBatchRuleTarget = (value) => {
+  const raw = String(value || '').trim()
+
+  return /[\r\n]/.test(raw) || isCompleteRuleLine(raw) || /[\s,;，；]/.test(raw)
+}
+
 const addCurrentTabRule = async ({ policy, kind, target: targetOverride, url } = {}) => {
   const settings = await getSettings()
   const tab = await getActiveTab()
-  const detected = String(targetOverride || '').trim()
-    ? detectRuleFromHost({ host: targetOverride, preferRootDomain: settings.preferRootDomain })
-    : detectRuleFromUrl({ url: url || tab?.url || '', preferRootDomain: settings.preferRootDomain })
+  const rawTargetOverride = String(targetOverride || '').trim()
+  const batchTarget = rawTargetOverride && isBatchRuleTarget(rawTargetOverride)
+  const detected =
+    rawTargetOverride && !batchTarget
+      ? detectRuleFromHost({ host: targetOverride, preferRootDomain: settings.preferRootDomain })
+      : detectRuleFromUrl({
+          url: url || tab?.url || '',
+          preferRootDomain: settings.preferRootDomain,
+        })
   const finalPolicy = policy || settings.defaultPolicy
   const finalKind = normalizeRuleKind(kind, detected.kind)
 
-  if (!detected.target) {
+  if (!batchTarget && !detected.target) {
     throw new Error('当前页面不是可添加的 http/https 网站')
   }
 
   const result = await addCustomRule({
-    target: detected.target,
+    target: batchTarget ? rawTargetOverride : detected.target,
     kind: finalKind,
     policy: finalPolicy,
     serverUrl: settings.serverUrl,
   })
+  const summary = Array.isArray(result.results)
+    ? `新增 ${result.addedCount || 0} 条，已存在 ${result.skippedCount || 0} 条${
+        result.errorCount ? `，失败 ${result.errorCount} 条` : ''
+      }`
+    : `${result.added ? '已添加' : '已存在'}到${POLICY_LABELS[finalPolicy]}：${result.rule}`
 
-  await notify(
-    'LuFei 自定义规则',
-    `${result.added ? '已添加' : '已存在'}到${POLICY_LABELS[finalPolicy]}：${result.rule}`,
-  )
+  await notify('LuFei 自定义规则', summary)
 
   return {
     ...result,
-    target: detected.target,
+    target: batchTarget ? rawTargetOverride : detected.target,
     policy: finalPolicy,
     kind: finalKind,
     kindLabel: finalKind === 'auto' ? detected.kindLabel : RULE_KIND_LABELS[finalKind],

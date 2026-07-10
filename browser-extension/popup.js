@@ -24,6 +24,8 @@ const KIND_LABELS = {
   raw: '原始规则',
 }
 
+const isBatchTarget = (value) => /[\r\n]/.test(value) || /^[A-Z][A-Z0-9-]*\s*,/.test(value.trim())
+
 const sendMessage = (message) => {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(message, resolve)
@@ -107,6 +109,11 @@ const refreshManualTarget = async () => {
     return
   }
 
+  if (isBatchTarget(target)) {
+    kindEl.textContent = '规则类型：批量输入将逐行处理'
+    return
+  }
+
   const response = await sendMessage({ type: 'detect-target', target })
 
   if (!response?.ok) {
@@ -183,10 +190,13 @@ addButton.addEventListener('click', async () => {
     }
 
     const result = response.result
-    renderDetected(
-      { target: result.target, kind: result.kind, kindLabel: result.kindLabel },
-      { syncInput: true },
-    )
+    const isBatchResult = Array.isArray(result.results)
+    if (!isBatchResult) {
+      renderDetected(
+        { target: result.target, kind: result.kind, kindLabel: result.kindLabel },
+        { syncInput: true },
+      )
+    }
     const refreshText = result.refresh?.started
       ? '，已自动刷新规则源'
       : result.refresh?.ok
@@ -194,8 +204,13 @@ addButton.addEventListener('click', async () => {
         : result.refresh?.message
           ? `，规则已保存但刷新失败：${result.refresh.message}`
           : ''
+    const resultText = isBatchResult
+      ? `批量完成：新增 ${result.addedCount || 0} 条，已存在 ${result.skippedCount || 0} 条${
+          result.errorCount ? `，失败 ${result.errorCount} 条` : ''
+        }`
+      : `${result.added ? '已添加' : '已存在'}：${result.rule}`
 
-    setStatus(`${result.added ? '已添加' : '已存在'}：${result.rule}${refreshText}`, 'ok')
+    setStatus(`${resultText}${refreshText}`, 'ok')
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error')
   } finally {

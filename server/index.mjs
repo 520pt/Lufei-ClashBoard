@@ -1658,6 +1658,116 @@ const addCustomRule = ({ target, kind = 'auto', policy = CUSTOM_RULE_POLICY_PROX
   }
 }
 
+const splitCustomRuleTargets = (value, kind = 'auto') => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean)
+  }
+
+  const rawValue = String(value || '').trim()
+
+  if (!rawValue) {
+    return []
+  }
+
+  const normalizedKind = String(kind || 'auto')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+
+  if (normalizedKind === 'raw') {
+    return rawValue
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+
+  return rawValue
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const trimmedLine = line.trim()
+
+      if (!trimmedLine) return []
+
+      if (isCompleteCustomRuleLine(trimmedLine)) {
+        return [trimmedLine]
+      }
+
+      return trimmedLine.split(/[\s,;，；]+/)
+    })
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+const isCompleteCustomRuleLine = (value) => {
+  return /^[A-Z][A-Z0-9-]*\s*,/.test(String(value || '').trim())
+}
+
+const addCustomRules = ({ targets, kind = 'auto', policy = CUSTOM_RULE_POLICY_PROXY }) => {
+  const normalizedPolicy = normalizeCustomRulePolicy(policy)
+  const inputTargets = splitCustomRuleTargets(targets, kind)
+
+  if (inputTargets.length === 0) {
+    throw new Error('输入不能为空')
+  }
+
+  const rules = readCustomRuleEntries()
+  const existingRuleKeys = new Set(rules.map((entry) => `${entry.policy}\n${entry.rule}`))
+  const nextRules = [...rules]
+  const results = []
+  const errors = []
+
+  inputTargets.forEach((target) => {
+    try {
+      const rule = makeCustomRule(target, isCompleteCustomRuleLine(target) ? 'raw' : kind)
+      const key = `${normalizedPolicy}\n${rule}`
+      const added = !existingRuleKeys.has(key)
+
+      if (added) {
+        existingRuleKeys.add(key)
+        nextRules.push({ rule, policy: normalizedPolicy })
+      }
+
+      results.push({
+        target,
+        rule,
+        policy: normalizedPolicy,
+        added,
+      })
+    } catch (error) {
+      errors.push({
+        target,
+        message: getErrorMessage(error),
+      })
+    }
+  })
+
+  if (nextRules.length !== rules.length) {
+    backupCustomRulesSnapshot('before-add', rules)
+    const writtenRules = writeCustomRuleEntries(nextRules)
+    backupCustomRulesSnapshot('after-add', writtenRules)
+
+    return {
+      policy: normalizedPolicy,
+      results,
+      errors,
+      addedCount: results.filter((item) => item.added).length,
+      skippedCount: results.filter((item) => !item.added).length,
+      errorCount: errors.length,
+      rules: writtenRules,
+    }
+  }
+
+  return {
+    policy: normalizedPolicy,
+    results,
+    errors,
+    addedCount: 0,
+    skippedCount: results.length,
+    errorCount: errors.length,
+    rules,
+  }
+}
+
 const deleteCustomRule = (rule, policy = CUSTOM_RULE_POLICY_PROXY) => {
   const rules = readCustomRuleEntries()
   const target = String(rule || '').trim()
@@ -5905,13 +6015,25 @@ app.get('/api/lufei-clashboard/ping', (_req, res) => {
 app.post('/api/custom-rules', async (req, res) => {
   try {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
-    const result = addCustomRule({
-      target: req.body?.target,
+    const isBatchRequest =
+      Array.isArray(req.body?.targets) || String(req.body?.target || '').includes('\n')
+    const result = addCustomRules({
+      targets: Array.isArray(req.body?.targets) ? req.body.targets : req.body?.target,
       kind: req.body?.kind || 'auto',
       policy: req.body?.policy || CUSTOM_RULE_POLICY_PROXY,
     })
+
+    if (result.results.length === 0 && result.errors.length > 0) {
+      throw new Error(result.errors[0].message)
+    }
+
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
     const refresh = await startCustomRuleProviderRefresh(result.policy)
+
+    if (!isBatchRequest && result.results.length === 1) {
+      res.json({ ...result.results[0], rules: result.rules, cacheSync, refresh })
+      return
+    }
 
     res.json({ ...result, cacheSync, refresh })
   } catch (error) {
@@ -6119,6 +6241,7 @@ export {
   ACCESS_PASSWORD_INVALID_CODE,
   ACCESS_PASSWORD_REQUIRED_CODE,
   addCustomRule,
+  addCustomRules,
   app,
   applyCustomRuleProviderToYamlContent as applyCustomRuleProviderToYamlContentForTesting,
   buildCustomRuleSnippets,
