@@ -813,6 +813,48 @@ bookmarkearth.com
   assert.match(readCustomRuleListText('proxy'), /DOMAIN-SUFFIX,bookmarkearth\.com/)
 })
 
+test('custom rules manager keeps pasted clash rules as separate entries', () => {
+  replaceSnapshot({})
+
+  const pastedRules = `DOMAIN-KEYWORD,m-team
+DOMAIN-KEYWORD,nicept
+DOMAIN-KEYWORD,ilolicon
+DOMAIN-KEYWORD,hdatmos
+DOMAIN-KEYWORD,52pt
+DOMAIN-KEYWORD,hdupt
+DOMAIN-KEYWORD,carpt
+DOMAIN-KEYWORD,hddolby
+DOMAIN-KEYWORD,btschool
+DOMAIN-KEYWORD,hdtime
+DOMAIN-KEYWORD,hdhome
+DOMAIN-KEYWORD,rousi
+DOMAIN-KEYWORD,cyanbug
+DOMAIN-KEYWORD,hdkyl
+DOMAIN-KEYWORD,0ff
+DOMAIN-KEYWORD,hdarea
+DOMAIN-KEYWORD,piggo
+DOMAIN-KEYWORD,tu88
+DOMAIN-KEYWORD,ptvicomo
+DOMAIN-KEYWORD,keepfrds
+DOMAIN-KEYWORD,pandapt
+DOMAIN-KEYWORD,htpt
+DOMAIN-SUFFIX,cnboy.org
+DOMAIN-SUFFIX,bookmarkearth.com`
+  const batch = addCustomRules({
+    targets: pastedRules,
+    kind: 'auto',
+    policy: 'proxy',
+  })
+  const listLines = readCustomRuleListText('proxy').trim().split('\n')
+
+  assert.equal(batch.addedCount, 24)
+  assert.equal(batch.errorCount, 0)
+  assert.equal(listLines.length, 24)
+  assert.equal(listLines[0], 'DOMAIN-KEYWORD,m-team')
+  assert.equal(listLines[23], 'DOMAIN-SUFFIX,bookmarkearth.com')
+  assert.ok(!listLines.some((line) => line.includes('\n')))
+})
+
 test('custom rule providers are synced to local rule cache', async () => {
   replaceSnapshot({})
   addCustomRule({ target: 'example-cache.com', policy: 'proxy' })
