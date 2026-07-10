@@ -163,13 +163,22 @@
         @submit.prevent="handleAddRule"
       >
         <div class="join min-w-0">
-          <select
-            v-model="targetPolicy"
-            class="select select-bordered select-sm join-item w-24 shrink-0"
+          <button
+            class="btn btn-sm join-item w-20 shrink-0"
+            :class="targetPolicy === 'proxy' ? 'btn-primary' : 'btn-outline'"
+            type="button"
+            @click="targetPolicy = 'proxy'"
           >
-            <option value="proxy">代理</option>
-            <option value="direct">直连</option>
-          </select>
+            代理
+          </button>
+          <button
+            class="btn btn-sm join-item w-20 shrink-0"
+            :class="targetPolicy === 'direct' ? 'btn-success' : 'btn-outline'"
+            type="button"
+            @click="targetPolicy = 'direct'"
+          >
+            直连
+          </button>
           <input
             v-model.trim="target"
             class="input input-bordered input-sm join-item min-w-0 flex-1"
