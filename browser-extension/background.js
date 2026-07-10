@@ -1,13 +1,17 @@
 const DEFAULT_SETTINGS = {
   serverUrl: 'http://10.0.0.11:2048',
   defaultPolicy: 'proxy',
-  defaultKind: 'domain_suffix',
   preferRootDomain: true,
 }
 
 const POLICY_LABELS = {
   proxy: '代理',
   direct: '直连',
+}
+
+const RULE_KIND_LABELS = {
+  domain_suffix: 'DOMAIN-SUFFIX',
+  ip_cidr: 'IP-CIDR',
 }
 
 const KNOWN_TWO_PART_SUFFIXES = new Set([
@@ -51,9 +55,6 @@ const getSettings = async () => {
   return {
     serverUrl: normalizeServerUrl(stored.serverUrl),
     defaultPolicy: stored.defaultPolicy === 'direct' ? 'direct' : 'proxy',
-    defaultKind: ['auto', 'domain', 'domain_suffix', 'ip_cidr'].includes(stored.defaultKind)
-      ? stored.defaultKind
-      : 'domain_suffix',
     preferRootDomain: stored.preferRootDomain !== false,
   }
 }
@@ -62,16 +63,24 @@ const saveSettings = async (settings) => {
   await chrome.storage.sync.set({
     serverUrl: normalizeServerUrl(settings.serverUrl),
     defaultPolicy: settings.defaultPolicy === 'direct' ? 'direct' : 'proxy',
-    defaultKind: ['auto', 'domain', 'domain_suffix', 'ip_cidr'].includes(settings.defaultKind)
-      ? settings.defaultKind
-      : 'domain_suffix',
     preferRootDomain: settings.preferRootDomain !== false,
   })
 }
 
-const isIpAddress = (host) => {
-  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || /^[0-9a-f:]+$/i.test(host)
+const isIpv4Address = (host) => {
+  const parts = String(host || '').split('.')
+
+  return (
+    parts.length === 4 &&
+    parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255)
+  )
 }
+
+const isIpv6Address = (host) => {
+  return String(host || '').includes(':') && /^[0-9a-f:]+$/i.test(host)
+}
+
+const isIpAddress = (host) => isIpv4Address(host) || isIpv6Address(host)
 
 const getRegistrableDomain = (host) => {
   const parts = String(host || '')
@@ -104,16 +113,39 @@ const extractHostFromUrl = (url) => {
   }
 }
 
-const buildRuleTarget = ({ url, preferRootDomain = true, kind = 'domain_suffix' }) => {
-  const host = extractHostFromUrl(url)
+const normalizeManualTarget = (value) => {
+  const raw = String(value || '').trim()
 
-  if (!host) return ''
+  if (!raw) return ''
 
-  if (isIpAddress(host)) return host
+  if (/^https?:\/\//i.test(raw)) {
+    return extractHostFromUrl(raw)
+  }
 
-  if (kind === 'domain' || preferRootDomain === false) return host
+  return raw
+    .replace(/^\[|\]$/g, '')
+    .replace(/^www\./, '')
+    .toLowerCase()
+}
 
-  return getRegistrableDomain(host)
+const detectRuleFromHost = ({ host, preferRootDomain = true } = {}) => {
+  const normalizedHost = normalizeManualTarget(host)
+
+  if (!normalizedHost) {
+    return { target: '', kind: 'domain_suffix', kindLabel: RULE_KIND_LABELS.domain_suffix }
+  }
+
+  if (isIpAddress(normalizedHost)) {
+    return { target: normalizedHost, kind: 'ip_cidr', kindLabel: RULE_KIND_LABELS.ip_cidr }
+  }
+
+  const target = preferRootDomain ? getRegistrableDomain(normalizedHost) : normalizedHost
+
+  return { target, kind: 'domain_suffix', kindLabel: RULE_KIND_LABELS.domain_suffix }
+}
+
+const detectRuleFromUrl = ({ url, preferRootDomain = true } = {}) => {
+  return detectRuleFromHost({ host: extractHostFromUrl(url), preferRootDomain })
 }
 
 const getActiveTab = async () => {
@@ -149,26 +181,21 @@ const notify = async (title, message) => {
   })
 }
 
-const addCurrentTabRule = async ({ policy, kind, target: targetOverride, url } = {}) => {
+const addCurrentTabRule = async ({ policy, target: targetOverride, url } = {}) => {
   const settings = await getSettings()
   const tab = await getActiveTab()
-  const finalKind = kind || settings.defaultKind
+  const detected = String(targetOverride || '').trim()
+    ? detectRuleFromHost({ host: targetOverride, preferRootDomain: settings.preferRootDomain })
+    : detectRuleFromUrl({ url: url || tab?.url || '', preferRootDomain: settings.preferRootDomain })
   const finalPolicy = policy || settings.defaultPolicy
-  const target =
-    String(targetOverride || '').trim() ||
-    buildRuleTarget({
-      url: url || tab?.url || '',
-      preferRootDomain: settings.preferRootDomain,
-      kind: finalKind,
-    })
 
-  if (!target) {
+  if (!detected.target) {
     throw new Error('当前页面不是可添加的 http/https 网站')
   }
 
   const result = await addCustomRule({
-    target,
-    kind: finalKind,
+    target: detected.target,
+    kind: detected.kind,
     policy: finalPolicy,
     serverUrl: settings.serverUrl,
   })
@@ -180,15 +207,29 @@ const addCurrentTabRule = async ({ policy, kind, target: targetOverride, url } =
 
   return {
     ...result,
-    target,
+    target: detected.target,
     policy: finalPolicy,
-    kind: finalKind,
+    kind: detected.kind,
+    kindLabel: detected.kindLabel,
     serverUrl: settings.serverUrl,
   }
 }
 
-const openOptionsPage = () => {
-  chrome.runtime.openOptionsPage()
+const testConnection = async (serverUrl) => {
+  const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/custom-rules`, {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  })
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data.message || `HTTP ${response.status}`)
+  }
+
+  return {
+    rules: Array.isArray(data.rules) ? data.rules.length : 0,
+    ruleUrl: data.ruleUrl || '',
+  }
 }
 
 const createContextMenus = () => {
@@ -203,11 +244,6 @@ const createContextMenus = () => {
       title: '添加当前网站到自定义直连',
       contexts: ['page', 'link'],
     })
-    chrome.contextMenus.create({
-      id: 'lufei-options',
-      title: '打开 LuFei 插件设置',
-      contexts: ['action'],
-    })
   })
 }
 
@@ -216,11 +252,6 @@ chrome.runtime.onStartup.addListener(createContextMenus)
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
   try {
-    if (info.menuItemId === 'lufei-options') {
-      openOptionsPage()
-      return
-    }
-
     const policy = info.menuItemId === 'lufei-add-direct' ? 'direct' : 'proxy'
     await addCurrentTabRule({ policy, url: info.linkUrl || info.pageUrl })
   } catch (error) {
@@ -244,18 +275,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'get-current-tab') {
       const settings = await getSettings()
       const tab = await getActiveTab()
-      const target = buildRuleTarget({
+      const detected = detectRuleFromUrl({
         url: tab?.url || '',
         preferRootDomain: settings.preferRootDomain,
-        kind: settings.defaultKind,
       })
 
-      sendResponse({ ok: true, tab, target, settings })
+      sendResponse({ ok: true, tab, detected, settings })
+      return
+    }
+
+    if (message?.type === 'detect-target') {
+      const settings = await getSettings()
+      sendResponse({
+        ok: true,
+        detected: detectRuleFromHost({
+          host: message.target || '',
+          preferRootDomain: settings.preferRootDomain,
+        }),
+      })
       return
     }
 
     if (message?.type === 'add-current-tab-rule') {
       sendResponse({ ok: true, result: await addCurrentTabRule(message) })
+      return
+    }
+
+    if (message?.type === 'test-connection') {
+      sendResponse({ ok: true, result: await testConnection(message.serverUrl) })
       return
     }
 

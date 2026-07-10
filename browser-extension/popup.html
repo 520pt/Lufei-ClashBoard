@@ -23,13 +23,39 @@
         </div>
         <div>
           <h1 class="title">LuFei 自定义规则</h1>
-          <p class="subtitle">把当前网站一键加入代理或直连</p>
+          <p class="subtitle">当前网站一键加入代理或直连</p>
         </div>
       </header>
 
       <section class="content">
+        <label class="field field-first">
+          <span class="label">面板地址</span>
+          <input
+            id="server-url"
+            class="input"
+            placeholder="http://10.0.0.11:2048"
+          />
+        </label>
+
+        <div class="actions compact-actions">
+          <button
+            id="save-settings"
+            type="button"
+            class="button button-ghost"
+          >
+            保存地址
+          </button>
+          <button
+            id="test-connection"
+            type="button"
+            class="button button-ghost"
+          >
+            测试连接
+          </button>
+        </div>
+
         <div class="target-box">
-          <div class="label">当前识别</div>
+          <div class="label">自动识别</div>
           <div
             id="target"
             class="target-line"
@@ -37,10 +63,30 @@
             正在读取当前标签页...
           </div>
           <div
-            id="server"
+            id="kind"
             class="hint"
-          ></div>
+          >
+            规则类型：自动识别中
+          </div>
         </div>
+
+        <label class="field">
+          <span class="label">手动目标，可留空</span>
+          <input
+            id="manual-target"
+            class="input"
+            placeholder="例如 example.com 或 1.1.1.1"
+          />
+          <span class="hint">填写后会自动判断 DOMAIN-SUFFIX 或 IP-CIDR。</span>
+        </label>
+
+        <label class="switch-line">
+          <input
+            id="prefer-root-domain"
+            type="checkbox"
+          />
+          <span>域名默认转成根域名，例如 www.example.com → example.com</span>
+        </label>
 
         <div class="field">
           <span class="label">添加到哪个策略</span>
@@ -65,35 +111,12 @@
           </div>
         </div>
 
-        <div class="field grid">
-          <label>
-            <span class="label">规则类型</span>
-            <select
-              id="kind"
-              class="select"
-            >
-              <option value="domain_suffix">DOMAIN-SUFFIX</option>
-              <option value="domain">DOMAIN</option>
-              <option value="auto">自动</option>
-              <option value="ip_cidr">IP-CIDR</option>
-            </select>
-          </label>
-          <label>
-            <span class="label">手动目标</span>
-            <input
-              id="manual-target"
-              class="input"
-              placeholder="可留空，用当前网站"
-            />
-          </label>
-        </div>
-
         <button
           id="add"
           type="button"
           class="button button-primary"
         >
-          添加当前网站
+          添加到自定义规则
         </button>
 
         <div class="actions">
@@ -105,11 +128,11 @@
             打开面板
           </button>
           <button
-            id="options"
+            id="refresh"
             type="button"
             class="button button-ghost"
           >
-            设置
+            重新识别
           </button>
         </div>
 
