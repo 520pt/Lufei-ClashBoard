@@ -34,6 +34,8 @@ const {
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
   getProxyGroupRulePenetrationCacheEntryForTesting,
+  getRemoteYamlBackupCleanupCommandForTesting,
+  getRemoteYamlBackupPathForTesting,
   getRequestAccessAuthStatusForTesting,
   isLikelyClashControllerResultForTesting,
   makeCustomRule,
@@ -409,6 +411,18 @@ rule-providers:
 
   assert.equal(second.changed, false)
   assert.equal(second.content, first.content)
+})
+
+test('custom rule YAML backup keeps one latest LuFei backup', () => {
+  const configPath = '/etc/openclash/config/lufei.yaml'
+  const backupPath = getRemoteYamlBackupPathForTesting(configPath)
+  const cleanupCommand = getRemoteYamlBackupCleanupCommandForTesting(configPath, backupPath)
+
+  assert.equal(backupPath, '/etc/openclash/config/lufei.yaml.lufei-latest.bak')
+  assert.match(cleanupCommand, /find '\/etc\/openclash\/config'/)
+  assert.match(cleanupCommand, /-name 'lufei\.yaml\.lufei-\*\.bak'/)
+  assert.match(cleanupCommand, /! -name 'lufei\.yaml\.lufei-latest\.bak'/)
+  assert.match(cleanupCommand, /-exec rm -f \{\} \+/)
 })
 
 test('custom rule YAML apply updates old single custom provider to proxy and direct providers', () => {

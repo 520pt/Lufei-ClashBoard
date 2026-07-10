@@ -2792,13 +2792,24 @@ const assertRuleSourceReadyForSync = async () => {
   }
 }
 
-const getRemoteYamlBackupPath = (configPath) => {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:.TZ]/g, '')
-    .slice(0, 14)
+const getRemoteYamlBackupPath = (configPath) => `${configPath}.lufei-latest.bak`
 
-  return `${configPath}.lufei-${timestamp}.bak`
+const getRemoteYamlBackupCleanupCommand = (configPath, keepBackupPath = getRemoteYamlBackupPath(configPath)) => {
+  const configDir = path.posix.dirname(String(configPath))
+  const configBaseName = path.posix.basename(String(configPath))
+  const keepBackupBaseName = path.posix.basename(String(keepBackupPath))
+
+  return [
+    'find',
+    shellQuote(configDir),
+    '-maxdepth 1 -type f',
+    '-name',
+    shellQuote(`${configBaseName}.lufei-*.bak`),
+    '!',
+    '-name',
+    shellQuote(keepBackupBaseName),
+    '-exec rm -f {} +',
+  ].join(' ')
 }
 
 const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
@@ -2834,6 +2845,18 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       if (backupResult.code !== 0) {
         throw new Error(
           backupResult.stderr.trim() || `Failed to backup remote YAML: ${snapshot.configPath}`,
+        )
+      }
+
+      const cleanupBackupResult = await sshExec(
+        client,
+        getRemoteYamlBackupCleanupCommand(snapshot.configPath, backupPath),
+      )
+
+      if (cleanupBackupResult.code !== 0) {
+        console.warn(
+          '[custom-rules] failed to cleanup old remote YAML backups',
+          cleanupBackupResult.stderr.trim(),
         )
       }
 
@@ -6403,6 +6426,8 @@ export {
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
   getProxyGroupRulePenetrationCacheEntry as getProxyGroupRulePenetrationCacheEntryForTesting,
+  getRemoteYamlBackupCleanupCommand as getRemoteYamlBackupCleanupCommandForTesting,
+  getRemoteYamlBackupPath as getRemoteYamlBackupPathForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
   isLikelyClashControllerResult as isLikelyClashControllerResultForTesting,
   makeCustomRule,
