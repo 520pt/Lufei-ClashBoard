@@ -56,7 +56,7 @@
         </div>
 
         <form
-          class="bg-base-200 rounded-box grid gap-2 p-3 md:grid-cols-[1fr_auto]"
+          class="bg-base-200 rounded-box grid gap-2 p-3 md:grid-cols-[1fr_1fr_auto]"
           @submit.prevent="handleSaveSettings"
         >
           <label class="form-control min-w-0">
@@ -64,7 +64,16 @@
             <input
               v-model.trim="policyGroup"
               class="input input-bordered input-sm"
-              placeholder="自定义 或 zidingyi"
+              placeholder="自定义-代理 或 zidingyi-daili"
+              required
+            />
+          </label>
+          <label class="form-control min-w-0">
+            <span class="label-text mb-1 text-xs">直连策略名称</span>
+            <input
+              v-model.trim="directPolicyGroup"
+              class="input input-bordered input-sm"
+              placeholder="自定义-直连 或 zidingyi-zhilian"
               required
             />
           </label>
@@ -75,8 +84,8 @@
           >
             保存名称
           </button>
-          <div class="text-base-content/60 text-xs md:col-span-2">
-            能显示中文就用中文，默认“自定义”；如果 OpenClash 中中文显示异常，就改成拼音。
+          <div class="text-base-content/60 text-xs md:col-span-3">
+            默认写入“自定义-代理”和“自定义-直连”；如果 OpenClash 中中文显示异常，就改成拼音。
           </div>
         </form>
       </div>
@@ -93,15 +102,24 @@
       </div>
 
       <form
-        class="grid gap-2 md:grid-cols-[1fr_180px_auto]"
+        class="grid gap-2 md:grid-cols-[1fr_180px]"
         @submit.prevent="handleAddRule"
       >
-        <input
-          v-model.trim="target"
-          class="input input-bordered input-sm"
-          placeholder="输入域名、网址、IP 或 CIDR"
-          required
-        />
+        <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+          <input
+            v-model.trim="target"
+            class="input input-bordered input-sm"
+            placeholder="输入域名、网址、IP 或 CIDR"
+            required
+          />
+          <button
+            class="btn btn-primary btn-sm"
+            type="submit"
+            :disabled="submitting"
+          >
+            添加规则
+          </button>
+        </div>
         <select
           v-model="kind"
           class="select select-bordered select-sm"
@@ -112,13 +130,6 @@
           <option value="ip_cidr">IP-CIDR</option>
           <option value="raw">原始规则</option>
         </select>
-        <button
-          class="btn btn-primary btn-sm"
-          type="submit"
-          :disabled="submitting"
-        >
-          添加规则
-        </button>
       </form>
     </div>
 
@@ -285,7 +296,10 @@ import {
   type CustomRulesPayload,
 } from '@/api'
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
-import { CUSTOM_PROXY_GROUP_ICON } from '@/helper/autoImportSettings'
+import {
+  CUSTOM_DIRECT_PROXY_GROUP_ICON,
+  CUSTOM_PROXY_GROUP_ICON,
+} from '@/helper/autoImportSettings'
 import { showNotification } from '@/helper/notification'
 import { fetchProxies } from '@/store/proxies'
 import { fetchRules } from '@/store/rules'
@@ -296,7 +310,8 @@ import { computed, onMounted, ref } from 'vue'
 const customRules = ref<CustomRulesPayload | null>(null)
 const target = ref('')
 const kind = ref('auto')
-const policyGroup = ref('自定义')
+const policyGroup = ref('自定义-代理')
+const directPolicyGroup = ref('自定义-直连')
 const loading = ref(false)
 const submitting = ref(false)
 const errorMessage = ref('')
@@ -326,7 +341,9 @@ const loadCustomRules = async () => {
   try {
     customRules.value = await fetchCustomRulesAPI()
     policyGroup.value = customRules.value.settings.policyGroup
-    ensureCustomPolicyGroupIcon(policyGroup.value)
+    directPolicyGroup.value = customRules.value.settings.directPolicyGroup
+    ensureCustomPolicyGroupIcon(policyGroup.value, CUSTOM_PROXY_GROUP_ICON)
+    ensureCustomPolicyGroupIcon(directPolicyGroup.value, CUSTOM_DIRECT_PROXY_GROUP_ICON)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -357,7 +374,7 @@ const refreshRuntimeRulesAndProxies = async () => {
   return false
 }
 
-const ensureCustomPolicyGroupIcon = (name: string) => {
+const ensureCustomPolicyGroupIcon = (name: string, icon: string) => {
   const policyGroupName = name.trim()
 
   if (!policyGroupName) return
@@ -365,15 +382,13 @@ const ensureCustomPolicyGroupIcon = (name: string) => {
   const existing = iconReflectList.value.find((item) => item.name === policyGroupName)
 
   if (existing) {
-    if (!existing.icon) {
-      existing.icon = CUSTOM_PROXY_GROUP_ICON
-    }
+    existing.icon = icon
     return
   }
 
   iconReflectList.value.push({
     name: policyGroupName,
-    icon: CUSTOM_PROXY_GROUP_ICON,
+    icon,
     uuid: uuid(),
   })
 }
@@ -458,9 +473,16 @@ const handleSaveSettings = async () => {
   submitting.value = true
 
   try {
-    await updateCustomRulesSettingsAPI({ policyGroup: policyGroup.value })
-    ensureCustomPolicyGroupIcon(policyGroup.value)
-    showNotification({ content: `已保存代理策略名称：${policyGroup.value}`, type: 'alert-success' })
+    await updateCustomRulesSettingsAPI({
+      policyGroup: policyGroup.value,
+      directPolicyGroup: directPolicyGroup.value,
+    })
+    ensureCustomPolicyGroupIcon(policyGroup.value, CUSTOM_PROXY_GROUP_ICON)
+    ensureCustomPolicyGroupIcon(directPolicyGroup.value, CUSTOM_DIRECT_PROXY_GROUP_ICON)
+    showNotification({
+      content: `已保存策略名称：${policyGroup.value} / ${directPolicyGroup.value}`,
+      type: 'alert-success',
+    })
     await loadCustomRules()
   } catch (error) {
     showNotification({
@@ -480,11 +502,22 @@ const confirmApplyToYaml = async () => {
   try {
     const result = await applyCustomRuleToActiveYamlAPI(customRules.value.ruleUrl)
     applyDialogVisible.value = false
-    ensureCustomPolicyGroupIcon(result.policyGroup || policyGroup.value)
+    ensureCustomPolicyGroupIcon(result.policyGroup || policyGroup.value, CUSTOM_PROXY_GROUP_ICON)
+    ensureCustomPolicyGroupIcon(
+      result.directPolicyGroup || directPolicyGroup.value,
+      CUSTOM_DIRECT_PROXY_GROUP_ICON,
+    )
 
-    if (result.policyGroup && result.policyGroup !== policyGroup.value) {
-      await updateCustomRulesSettingsAPI({ policyGroup: result.policyGroup })
-      policyGroup.value = result.policyGroup
+    if (
+      (result.policyGroup && result.policyGroup !== policyGroup.value) ||
+      (result.directPolicyGroup && result.directPolicyGroup !== directPolicyGroup.value)
+    ) {
+      await updateCustomRulesSettingsAPI({
+        policyGroup: result.policyGroup || policyGroup.value,
+        directPolicyGroup: result.directPolicyGroup || directPolicyGroup.value,
+      })
+      policyGroup.value = result.policyGroup || policyGroup.value
+      directPolicyGroup.value = result.directPolicyGroup || directPolicyGroup.value
       await loadCustomRules()
     }
 

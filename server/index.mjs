@@ -56,7 +56,8 @@ const RULE_SOURCE_SSH_REQUIRED_CODE = 'RULE_SOURCE_SSH_REQUIRED'
 const CUSTOM_RULES_KEY = 'custom-rules/list'
 const CUSTOM_RULES_SETTINGS_KEY = 'custom-rules/settings'
 const DEFAULT_CUSTOM_RULE_PROVIDER_NAME = 'LuFei / Custom'
-const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '自定义'
+const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '自定义-代理'
+const DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP = '自定义-直连'
 const DEFAULT_CUSTOM_RULE_FILE_NAME = 'ziyong.list'
 const accessSessionSecret = randomBytes(32).toString('hex')
 const configuredRuleProviderAutoRefreshCheckMs = Number.parseInt(
@@ -536,6 +537,10 @@ const readCustomRulesSettings = () => {
       typeof settings.policyGroup === 'string' && settings.policyGroup.trim()
         ? settings.policyGroup.trim()
         : DEFAULT_CUSTOM_RULE_POLICY_GROUP,
+    directPolicyGroup:
+      typeof settings.directPolicyGroup === 'string' && settings.directPolicyGroup.trim()
+        ? settings.directPolicyGroup.trim()
+        : DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP,
     fileName:
       typeof settings.fileName === 'string' && settings.fileName.trim()
         ? settings.fileName.trim().replace(/^\/+/, '')
@@ -554,6 +559,10 @@ const updateCustomRulesSettings = (settings = {}) => {
       typeof settings.policyGroup === 'string' && settings.policyGroup.trim()
         ? settings.policyGroup.trim()
         : current.policyGroup,
+    directPolicyGroup:
+      typeof settings.directPolicyGroup === 'string' && settings.directPolicyGroup.trim()
+        ? settings.directPolicyGroup.trim()
+        : current.directPolicyGroup,
     fileName:
       typeof settings.fileName === 'string' && settings.fileName.trim()
         ? settings.fileName.trim().replace(/^\/+/, '')
@@ -569,7 +578,10 @@ const buildCustomRuleSnippets = (ruleUrl) => {
   const settings = readCustomRulesSettings()
 
   return {
-    proxyGroupLine: `- {name: ${settings.policyGroup}, <<: *default}`,
+    proxyGroupLine: [
+      `- {name: ${settings.policyGroup}, <<: *default}`,
+      `- {name: ${settings.directPolicyGroup}, type: select, proxies: [DIRECT]}`,
+    ].join('\n'),
     providerLine: `${settings.providerName}: {<<: *class, url: "${ruleUrl}"}`,
     ruleLine: `RULE-SET,${settings.providerName},${settings.policyGroup}`,
   }
@@ -590,7 +602,9 @@ const isLoopbackPublicHost = (hostValue) => {
 }
 
 const isDockerBridgeIpv4Address = (address) => {
-  const parts = String(address || '').split('.').map((item) => Number(item))
+  const parts = String(address || '')
+    .split('.')
+    .map((item) => Number(item))
 
   return parts.length === 4 && parts[0] === 172 && parts[1] === 17
 }
@@ -613,9 +627,8 @@ const selectPublicCustomRuleHost = ({ hostHeader, openWrtHost, localAddresses } 
     return parsedHost
   }
 
-  const addresses = (Array.isArray(localAddresses)
-    ? localAddresses
-    : getLocalPrivateIpv4Interfaces()
+  const addresses = (
+    Array.isArray(localAddresses) ? localAddresses : getLocalPrivateIpv4Interfaces()
   ).filter((address) => !isDockerBridgeIpv4Address(address))
   const openWrtPrefix = getIpv4Prefix(openWrtHost)
 
@@ -813,16 +826,20 @@ const parsedYamlIncludesCustomProxyGroup = (parsed, policyGroup) => {
   )
 }
 
-const resolveCustomPolicyGroupName = (parsed, requestedPolicyGroup) => {
+const resolveCustomPolicyGroupName = (parsed, requestedPolicyGroup, fallbackPolicyGroup) => {
   if (!parsedYamlIncludesProxyProvider(parsed, requestedPolicyGroup)) {
     return requestedPolicyGroup
   }
 
-  if (!parsedYamlIncludesProxyProvider(parsed, DEFAULT_CUSTOM_RULE_POLICY_GROUP)) {
-    return DEFAULT_CUSTOM_RULE_POLICY_GROUP
+  if (!parsedYamlIncludesProxyProvider(parsed, fallbackPolicyGroup)) {
+    return fallbackPolicyGroup
   }
 
   return `${requestedPolicyGroup}策略`
+}
+
+const buildDirectPolicyGroupLine = (policyGroup) => {
+  return `  - {name: ${policyGroup}, type: select, proxies: [DIRECT]}`
 }
 
 const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
@@ -834,6 +851,10 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     options.policyGroup,
     DEFAULT_CUSTOM_RULE_POLICY_GROUP,
   )
+  const requestedDirectPolicyGroup = normalizeYamlInlineValue(
+    options.directPolicyGroup,
+    DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP,
+  )
   const ruleUrl = normalizeYamlInlineValue(options.ruleUrl, '')
 
   if (!ruleUrl) {
@@ -841,7 +862,16 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
   }
 
   const parsed = parseYaml(content) || {}
-  const policyGroup = resolveCustomPolicyGroupName(parsed, requestedPolicyGroup)
+  const policyGroup = resolveCustomPolicyGroupName(
+    parsed,
+    requestedPolicyGroup,
+    DEFAULT_CUSTOM_RULE_POLICY_GROUP,
+  )
+  const directPolicyGroup = resolveCustomPolicyGroupName(
+    parsed,
+    requestedDirectPolicyGroup,
+    DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP,
+  )
   const lines = String(content || '')
     .replace(/\r\n/g, '\n')
     .split('\n')
@@ -854,6 +884,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     removedDuplicateProxyGroups: 0,
     removedConflictingProxyGroups: 0,
     policyGroup,
+    directPolicyGroup,
   }
 
   if (policyGroup !== requestedPolicyGroup) {
@@ -873,11 +904,34 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     })
   }
 
-  result.removedDuplicateProxyGroups = removeDuplicateProxyGroupsByName(lines, policyGroup)
+  if (directPolicyGroup !== requestedDirectPolicyGroup) {
+    const removedDirectConflicts = removeProxyGroupsByName(lines, requestedDirectPolicyGroup)
+    result.removedConflictingProxyGroups += removedDirectConflicts
+    if (removedDirectConflicts > 0) {
+      result.changed = true
+    }
+  }
+
+  result.removedDuplicateProxyGroups =
+    removeDuplicateProxyGroupsByName(lines, policyGroup) +
+    removeDuplicateProxyGroupsByName(lines, directPolicyGroup)
 
   if (!parsedYamlIncludesCustomProxyGroup(parsed, policyGroup)) {
     if (
       !insertLineIntoYamlSection(lines, 'proxy-groups', `  - {name: ${policyGroup}, <<: *default}`)
+    ) {
+      throw new Error('proxy-groups section was not found in the active YAML.')
+    }
+    result.addedProxyGroup = true
+  }
+
+  if (!parsedYamlIncludesCustomProxyGroup(parsed, directPolicyGroup)) {
+    if (
+      !insertLineIntoYamlSection(
+        lines,
+        'proxy-groups',
+        buildDirectPolicyGroupLine(directPolicyGroup),
+      )
     ) {
       throw new Error('proxy-groups section was not found in the active YAML.')
     }
@@ -1848,6 +1902,7 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
     const applyResult = applyCustomRuleProviderToYamlContent(currentContent, {
       providerName: settings.providerName,
       policyGroup: settings.policyGroup,
+      directPolicyGroup: settings.directPolicyGroup,
       ruleUrl,
     })
     let backupPath = ''
@@ -5079,6 +5134,7 @@ app.post('/api/custom-rules/settings', (req, res) => {
   try {
     const settings = updateCustomRulesSettings({
       policyGroup: req.body?.policyGroup,
+      directPolicyGroup: req.body?.directPolicyGroup,
       providerName: req.body?.providerName,
       fileName: req.body?.fileName,
     })

@@ -472,6 +472,7 @@ export const fetchBackendUpdateAvailableAPI = async () => {
 export type CustomRulesSettings = {
   providerName: string
   policyGroup: string
+  directPolicyGroup: string
   fileName: string
 }
 
@@ -496,6 +497,7 @@ export type ApplyCustomRuleYamlResult = {
   addedRule: boolean
   addedProxyGroup: boolean
   policyGroup?: string
+  directPolicyGroup?: string
   removedConflictingProxyGroups?: number
   removedDuplicateProxyGroups?: number
 }

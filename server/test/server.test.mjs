@@ -363,6 +363,7 @@ rule-providers:
   )
   assert.match(first.content, /  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,TEST \/ Domain,Test/)
   assert.match(first.content, /  - \{name: 路飞, <<: \*default\}/)
+  assert.match(first.content, /  - \{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
 
   const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
     providerName: 'LuFei / Custom',
@@ -438,11 +439,11 @@ rule-providers:
   })
 
   assert.equal(result.changed, true)
-  assert.equal(result.policyGroup, '自定义')
+  assert.equal(result.policyGroup, '自定义-代理')
   assert.equal(result.removedConflictingProxyGroups, 1)
   assert.doesNotMatch(result.content, /\{name: 路飞, <<: \*default\}/)
-  assert.match(result.content, /\{name: 自定义, <<: \*default\}/)
-  assert.match(result.content, /RULE-SET,LuFei \/ Custom,自定义/)
+  assert.match(result.content, /\{name: 自定义-代理, <<: \*default\}/)
+  assert.match(result.content, /RULE-SET,LuFei \/ Custom,自定义-代理/)
   assert.doesNotMatch(result.content, /RULE-SET,LuFei \/ Custom,路飞/)
 })
 
@@ -451,7 +452,8 @@ test('custom rules manager generates rules and snippets', () => {
 
   assert.deepEqual(readCustomRulesSettings(), {
     providerName: 'LuFei / Custom',
-    policyGroup: '自定义',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
     fileName: 'ziyong.list',
   })
 
@@ -477,8 +479,17 @@ test('custom rules manager generates rules and snippets', () => {
 
   updateCustomRulesSettings({ policyGroup: 'lufei' })
   assert.equal(readCustomRulesSettings().policyGroup, 'lufei')
+  assert.equal(readCustomRulesSettings().directPolicyGroup, '自定义-直连')
   assert.equal(
     buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').ruleLine,
     'RULE-SET,LuFei / Custom,lufei',
+  )
+  assert.match(
+    buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').proxyGroupLine,
+    /name: lufei, <<: \*default/,
+  )
+  assert.match(
+    buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').proxyGroupLine,
+    /name: 自定义-直连, type: select, proxies: \[DIRECT\]/,
   )
 })
