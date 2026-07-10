@@ -88,7 +88,6 @@
               :rule="rule"
               :index="rules.indexOf(rule) + 1"
             />
-            <CustomRules v-if="!isRuleLookupQuery" />
           </template>
         </div>
       </div>
@@ -107,11 +106,6 @@
           :index="rules.indexOf(rule) + 1"
         />
       </template>
-      <template #after>
-        <div class="p-3">
-          <CustomRules />
-        </div>
-      </template>
     </VirtualScroller>
     <ProxyGroupRulePenetrationDialog />
   </div>
@@ -120,7 +114,6 @@
 <script setup lang="ts">
 import VirtualScroller from '@/components/common/VirtualScroller.vue'
 import ProxyGroupRulePenetrationDialog from '@/components/proxies/ProxyGroupRulePenetrationDialog.vue'
-import CustomRules from '@/components/rules/CustomRules.vue'
 import RuleCard from '@/components/rules/RuleCard.vue'
 import RuleFallbackCard from '@/components/rules/RuleFallbackCard.vue'
 import RuleLookupCard from '@/components/rules/RuleLookupCard.vue'
@@ -320,5 +313,3 @@ const isVirtualScroller = computed(() => {
   )
 })
 </script>
-
-
