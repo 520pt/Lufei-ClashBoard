@@ -23,6 +23,7 @@ const {
   buildCustomRuleSnippets,
   clashControllerDiscoveryPortsForTesting,
   createAccessSessionTokenForTesting,
+  deleteCustomRuleForTesting,
   extractOpenWrtVisibleClientIpv4ForTesting,
   extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromTextForTesting,
@@ -810,6 +811,28 @@ test('custom rule providers are synced to local rule cache', async () => {
 
   assert.equal(proxySearch.matches[0]?.name, 'LuFei / Custom')
   assert.equal(directSearch.matches[0]?.name, 'LuFei / Custom Direct')
+})
+
+test('custom rule changes create file backups in data directory', async () => {
+  replaceSnapshot({})
+  const backupDir = path.join(tempDir, 'custom-rule-backups')
+  const countBackups = async () => {
+    try {
+      return (await fs.readdir(backupDir)).filter((name) => name.endsWith('.json')).length
+    } catch {
+      return 0
+    }
+  }
+  const beforeCount = await countBackups()
+  const added = addCustomRule({ target: 'backup-check.example', policy: 'proxy' })
+
+  assert.equal(added.added, true)
+  assert.ok((await countBackups()) >= beforeCount + 2)
+
+  const deleted = deleteCustomRuleForTesting(added.rule, 'proxy')
+
+  assert.equal(deleted.removed, true)
+  assert.ok((await countBackups()) >= beforeCount + 4)
 })
 
 test('proxy group penetration cache expires when provider cache changes', () => {

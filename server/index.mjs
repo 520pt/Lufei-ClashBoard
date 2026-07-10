@@ -16,8 +16,9 @@ import { parse as parseYaml } from 'yaml'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
 const distDir = path.join(rootDir, 'dist')
-const dataDir = path.join(rootDir, 'data')
-const dbPath = process.env.ZASHBOARD_DB_PATH || path.join(dataDir, 'zashboard.sqlite')
+const defaultDataDir = path.join(rootDir, 'data')
+const dbPath = process.env.ZASHBOARD_DB_PATH || path.join(defaultDataDir, 'zashboard.sqlite')
+const dataDir = process.env.ZASHBOARD_DATA_DIR || path.dirname(dbPath)
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 2048)
 const backgroundImageStorageKey = '__background_image__'
@@ -38,6 +39,7 @@ const mihomoBinaryPath =
     ? path.resolve('.tools/mihomo-bin/mihomo-windows-amd64-compatible.exe')
     : path.resolve('.tools/mihomo-bin/mihomo'))
 const ruleSearchTempDir = path.join(dataDir, 'rule-search-temp')
+const customRuleBackupDir = path.join(dataDir, 'custom-rule-backups')
 const proxyGroupRulePenetrationCache = new Map()
 const proxyGroupRulePenetrationCacheBySignature = new Map()
 const PROXY_GROUP_RULE_PENETRATION_CACHE_TTL_MS = 10 * 60 * 1000
@@ -518,6 +520,48 @@ const normalizeCustomRulePolicy = (policy) => {
   return policy === CUSTOM_RULE_POLICY_DIRECT ? CUSTOM_RULE_POLICY_DIRECT : CUSTOM_RULE_POLICY_PROXY
 }
 
+const getTimestampFilePart = () => new Date().toISOString().replace(/[-:.TZ]/g, '')
+
+const backupCustomRulesSnapshot = (reason, rules, settings = readCustomRulesSettings()) => {
+  try {
+    fs.mkdirSync(customRuleBackupDir, { recursive: true })
+    const safeReason = String(reason || 'update').replace(/[^a-z0-9_-]/gi, '-')
+    const filePath = path.join(
+      customRuleBackupDir,
+      `${getTimestampFilePart()}-${safeReason}-${randomBytes(3).toString('hex')}.json`,
+    )
+
+    fs.writeFileSync(
+      filePath,
+      `${JSON.stringify(
+        {
+          reason,
+          createdAt: new Date().toISOString(),
+          rules,
+          settings,
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    )
+
+    const backupFiles = fs
+      .readdirSync(customRuleBackupDir)
+      .filter((name) => name.endsWith('.json'))
+      .sort()
+
+    backupFiles.slice(0, Math.max(0, backupFiles.length - 100)).forEach((name) => {
+      fs.unlinkSync(path.join(customRuleBackupDir, name))
+    })
+
+    return filePath
+  } catch (error) {
+    console.warn('[custom-rules] failed to backup custom rules', error)
+    return ''
+  }
+}
+
 const readCustomRuleEntries = () => {
   const row = getStorageValueStatement.get(CUSTOM_RULES_KEY)
   const value = parseStoredJson(row?.value, [])
@@ -652,6 +696,7 @@ const updateCustomRulesSettings = (settings = {}) => {
   }
 
   upsertStorageValueStatement.run(CUSTOM_RULES_SETTINGS_KEY, JSON.stringify(next))
+  backupCustomRulesSnapshot('settings', readCustomRuleEntries(), next)
 
   return next
 }
@@ -1540,7 +1585,9 @@ const addCustomRule = ({ target, kind = 'auto', policy = CUSTOM_RULE_POLICY_PROX
     }
   }
 
+  backupCustomRulesSnapshot('before-add', rules)
   const nextRules = writeCustomRuleEntries([...rules, { rule, policy: normalizedPolicy }])
+  backupCustomRulesSnapshot('after-add', nextRules)
 
   return {
     rule,
@@ -1565,9 +1612,13 @@ const deleteCustomRule = (rule, policy = CUSTOM_RULE_POLICY_PROXY) => {
     }
   }
 
+  backupCustomRulesSnapshot('before-delete', rules)
+  const writtenRules = writeCustomRuleEntries(nextRules)
+  backupCustomRulesSnapshot('after-delete', writtenRules)
+
   return {
     removed: true,
-    rules: writeCustomRuleEntries(nextRules),
+    rules: writtenRules,
   }
 }
 
@@ -5977,6 +6028,7 @@ export {
   CLASH_CONTROLLER_DISCOVERY_PORTS as clashControllerDiscoveryPortsForTesting,
   createAccessSessionToken as createAccessSessionTokenForTesting,
   db,
+  deleteCustomRule as deleteCustomRuleForTesting,
   extractOpenWrtVisibleClientIpv4 as extractOpenWrtVisibleClientIpv4ForTesting,
   extractNikkiYamlConfigPathsFromProcessList as extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromText as extractRemoteYamlConfigPathsFromTextForTesting,
