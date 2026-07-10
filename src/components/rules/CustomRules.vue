@@ -112,13 +112,20 @@
       </div>
 
       <form
-        class="grid gap-2 md:grid-cols-[1fr_120px_180px]"
+        class="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px]"
         @submit.prevent="handleAddRule"
       >
-        <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <div class="join min-w-0">
+          <select
+            v-model="targetPolicy"
+            class="select select-bordered select-sm join-item w-24 shrink-0"
+          >
+            <option value="proxy">代理</option>
+            <option value="direct">直连</option>
+          </select>
           <input
             v-model.trim="target"
-            class="input input-bordered input-sm"
+            class="input input-bordered input-sm join-item min-w-0 flex-1"
             placeholder="输入域名、网址、IP 或 CIDR"
             required
           />
@@ -130,13 +137,6 @@
             添加规则
           </button>
         </div>
-        <select
-          v-model="targetPolicy"
-          class="select select-bordered select-sm"
-        >
-          <option value="proxy">代理</option>
-          <option value="direct">直连</option>
-        </select>
         <select
           v-model="kind"
           class="select select-bordered select-sm"
