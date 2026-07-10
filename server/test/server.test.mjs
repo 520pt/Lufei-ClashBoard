@@ -370,7 +370,7 @@ rule-providers:
   )
   assert.match(
     first.content,
-    /  - \{name: 路飞, <<: \*default\}\n  - \{name: 路飞直连, type: select, proxies: \[DIRECT\]\}\n  - \{name: AI, <<: \*default\}/,
+    /  - \{name: 路飞, <<: \*default\}\n  - \{name: 路飞直连, <<: \*default\}\n  - \{name: AI, <<: \*default\}/,
   )
   assert.match(
     first.content,
@@ -381,7 +381,7 @@ rule-providers:
     /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"\}\n  LuFei \/ Custom Direct: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong-direct\.list"\}\n  TEST \/ Domain:/,
   )
   assert.match(first.content, /  - \{name: 路飞, <<: \*default\}/)
-  assert.match(first.content, /  - \{name: 路飞直连, type: select, proxies: \[DIRECT\]\}/)
+  assert.match(first.content, /  - \{name: 路飞直连, <<: \*default\}/)
 
   const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
     providerName: 'LuFei / Custom',
@@ -441,7 +441,7 @@ rule-providers:
   )
   assert.match(first.content, /  - RULE-SET,LuFei \/ Custom,自定义-代理/)
   assert.match(first.content, /  - RULE-SET,LuFei \/ Custom Direct,自定义-直连/)
-  assert.match(first.content, /  - \{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
+  assert.match(first.content, /  - \{name: 自定义-直连, <<: \*default\}/)
 
   const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
     providerName: 'LuFei / Custom',
@@ -490,10 +490,11 @@ rule-providers:
   assert.equal(result.changed, true)
   assert.equal(result.removedLegacyProxyGroups, 1)
   assert.equal(result.removedLegacyRules, 1)
+  assert.equal(result.updatedProxyGroup, true)
   assert.doesNotMatch(result.content, /\{name: 自定义, <<: \*default\}/)
   assert.doesNotMatch(result.content, /RULE-SET,LuFei \/ Custom,自定义\n/)
   assert.match(result.content, /\{name: 自定义-代理, <<: \*default\}/)
-  assert.match(result.content, /\{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
+  assert.match(result.content, /\{name: 自定义-直连, <<: \*default\}/)
   assert.match(result.content, /RULE-SET,LuFei \/ Custom,自定义-代理/)
   assert.match(result.content, /RULE-SET,LuFei \/ Custom Direct,自定义-直连/)
 })
@@ -535,9 +536,10 @@ rule-providers:
   assert.equal(result.normalizedProxyGroupOrder, true)
   assert.equal(result.normalizedRuleOrder, true)
   assert.equal(result.normalizedProviderOrder, true)
+  assert.equal(result.updatedProxyGroup, true)
   assert.match(
     result.content,
-    /  - \{name: 自定义-代理, <<: \*default\}\n  - \{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}\n  - \{name: AI, <<: \*default\}/,
+    /  - \{name: 自定义-代理, <<: \*default\}\n  - \{name: 自定义-直连, <<: \*default\}\n  - \{name: AI, <<: \*default\}/,
   )
   assert.match(
     result.content,
@@ -679,6 +681,6 @@ test('custom rules manager generates rules and snippets', () => {
       'http://10.0.0.10:2048/ziyong.list',
       'http://10.0.0.10:2048/ziyong-direct.list',
     ).proxyGroupLine,
-    /name: 自定义-直连, type: select, proxies: \[DIRECT\]/,
+    /name: 自定义-直连, <<: \*default/,
   )
 })

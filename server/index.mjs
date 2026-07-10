@@ -655,7 +655,7 @@ const buildCustomRuleSnippets = (ruleUrl, directRuleUrl) => {
   return {
     proxyGroupLine: [
       `- {name: ${settings.policyGroup}, <<: *default}`,
-      `- {name: ${settings.directPolicyGroup}, type: select, proxies: [DIRECT]}`,
+      `- {name: ${settings.directPolicyGroup}, <<: *default}`,
     ].join('\n'),
     providerLine: [
       `${settings.providerName}: {<<: *class, url: "${ruleUrl}"}`,
@@ -1100,7 +1100,7 @@ const resolveCustomPolicyGroupName = (parsed, requestedPolicyGroup, fallbackPoli
 }
 
 const buildDirectPolicyGroupLine = (policyGroup) => {
-  return `  - {name: ${policyGroup}, type: select, proxies: [DIRECT]}`
+  return `  - {name: ${policyGroup}, <<: *default}`
 }
 
 const buildDirectRuleUrlFromRuleUrl = (ruleUrl) => {
@@ -1161,6 +1161,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     updatedProvider: false,
     addedRule: false,
     addedProxyGroup: false,
+    updatedProxyGroup: false,
     removedDuplicateProxyGroups: 0,
     removedConflictingProxyGroups: 0,
     removedLegacyProxyGroups: 0,
@@ -1237,6 +1238,22 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
 
   if (!latestProxyGroupEntry || !latestDirectProxyGroupEntry) {
     throw new Error('proxy-groups section was not found in the active YAML.')
+  }
+
+  const latestDirectProxyGroupLines = lines.slice(
+    latestDirectProxyGroupEntry.start,
+    latestDirectProxyGroupEntry.end,
+  )
+  const directProxyGroupChanged =
+    latestDirectProxyGroupLines.length !== 1 || latestDirectProxyGroupLines[0] !== directProxyGroupLine
+
+  if (directProxyGroupChanged) {
+    lines.splice(
+      latestDirectProxyGroupEntry.start,
+      latestDirectProxyGroupEntry.end - latestDirectProxyGroupEntry.start,
+      directProxyGroupLine,
+    )
+    result.updatedProxyGroup = true
   }
 
   const orderedProxyGroupResult = ensureOrderedYamlProxyGroupEntries(lines, [
@@ -1318,6 +1335,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.updatedProvider ||
     result.addedRule ||
     result.addedProxyGroup ||
+    result.updatedProxyGroup ||
     result.normalizedProxyGroupOrder ||
     result.normalizedProviderOrder ||
     result.normalizedRuleOrder ||
@@ -2314,6 +2332,7 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       updatedProvider: applyResult.updatedProvider,
       addedRule: applyResult.addedRule,
       addedProxyGroup: applyResult.addedProxyGroup,
+      updatedProxyGroup: applyResult.updatedProxyGroup,
       removedLegacyProxyGroups: applyResult.removedLegacyProxyGroups,
       removedLegacyRules: applyResult.removedLegacyRules,
     }

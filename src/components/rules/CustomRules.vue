@@ -334,6 +334,7 @@ import {
   deleteCustomRuleAPI,
   fetchCustomRulesAPI,
   reloadConfigsAPI,
+  restartCoreAPI,
   updateCustomRulesSettingsAPI,
   updateRuleProviderAPI,
   type CustomRuleEntry,
@@ -581,21 +582,29 @@ const confirmApplyToYaml = async () => {
 
     showNotification({
       content: result.changed
-        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重新加载配置...`
-        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重新加载配置...`,
+        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重启核心...`
+        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重启核心...`,
       type: result.changed ? 'alert-success' : 'alert-info',
       timeout: 6000,
     })
 
-    await reloadConfigsAPI().catch(() => null)
+    let restarted = true
+
+    try {
+      await restartCoreAPI()
+    } catch {
+      restarted = false
+      await reloadConfigsAPI().catch(() => null)
+    }
+
     const refreshed = await refreshRuntimeRulesAndProxies()
 
     showNotification({
       content: refreshed
-        ? '配置已重新加载，策略组和规则列表已刷新'
+        ? `${restarted ? '核心已重启' : '核心重启失败，已尝试重载配置'}，策略组和规则列表已刷新`
         : '已写入 YAML，但当前控制器暂未刷新成功，请稍后手动刷新页面',
       type: refreshed ? 'alert-success' : 'alert-warning',
-      timeout: refreshed ? 3600 : 8000,
+      timeout: refreshed ? 4200 : 8000,
     })
   } catch (error) {
     showNotification({
