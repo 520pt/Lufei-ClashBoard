@@ -181,6 +181,27 @@ const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
 
+type RuleSourceProviderSnapshot = {
+  name?: string
+  url?: string
+}
+
+const getCustomRuleSourceDetectText = (data: { providers?: RuleSourceProviderSnapshot[] }) => {
+  const providers = data.providers || []
+  const hasProxyProvider = providers.some((provider) => provider.name === 'LuFei / Custom')
+  const hasDirectProvider = providers.some((provider) => provider.name === 'LuFei / Custom Direct')
+
+  if (hasProxyProvider && hasDirectProvider) {
+    return '，已包含自定义代理/直连'
+  }
+
+  const missing = []
+  if (!hasProxyProvider) missing.push('自定义代理')
+  if (!hasDirectProvider) missing.push('自定义直连')
+
+  return `，缺少${missing.join('/')}`
+}
+
 const isVisible = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit('update:modelValue', value),
@@ -268,6 +289,7 @@ const detectRuleSourceSsh = async () => {
       availablePlugins?: string[]
       configPath?: string
       providerCount?: number
+      providers?: RuleSourceProviderSnapshot[]
       message?: string
     } | null
 
@@ -280,12 +302,13 @@ const detectRuleSourceSsh = async () => {
           plugins: data.availablePlugins.join(' / '),
         })
       : ''
-    ruleSourceSshStatus.value = t('ruleSourceDetected', {
+    const customRuleSourceStatus = data ? getCustomRuleSourceDetectText(data) : ''
+    ruleSourceSshStatus.value = `${t('ruleSourceDetected', {
       plugin: data?.plugin || '-',
       path: data?.configPath || '-',
       count: `${data?.providerCount || 0}`,
       availablePlugins,
-    })
+    })}${customRuleSourceStatus}`
     showNotification({
       content: ruleSourceSshStatus.value,
       type: 'alert-success',

@@ -166,8 +166,10 @@ export const flushSmartGroupWeightsAPI = () => {
   return axios.post(`/cache/smart/flush`)
 }
 
-export const fetchProxyProviderAPI = () => {
-  return axios.get<{ providers: Record<string, ProxyProvider> }>('/providers/proxies')
+export const fetchProxyProviderAPI = (options: { skipErrorNotification?: boolean } = {}) => {
+  return axios.get<{ providers: Record<string, ProxyProvider> }>('/providers/proxies', {
+    skipErrorNotification: options.skipErrorNotification,
+  })
 }
 
 export const updateProxyProviderAPI = (name: string) => {

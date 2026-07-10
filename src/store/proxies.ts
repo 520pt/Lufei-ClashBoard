@@ -223,9 +223,10 @@ export const fetchProxies = async () => {
 
   fetchTime = nowTime
 
-  const [proxyRes, providerRes] = await Promise.all([fetchProxiesAPI(), fetchProxyProviderAPI()])
+  const proxyRes = await fetchProxiesAPI()
+  const providerRes = await fetchProxyProviderAPI({ skipErrorNotification: true })
   const proxyData = proxyRes.data
-  const providerData = providerRes.data
+  const providerData = 'data' in providerRes ? providerRes.data : { providers: {} }
 
   if (fetchTime !== nowTime) {
     return
@@ -439,7 +440,11 @@ export const proxyNodesLatencyTest = async (
 ) => {
   if (!nodes.length) return
 
-  const { displayName = scopeName, keyName = scopeName, url = getTestUrl(scopeName) } = options ?? {}
+  const {
+    displayName = scopeName,
+    keyName = scopeName,
+    url = getTestUrl(scopeName),
+  } = options ?? {}
 
   return testLatencyOneByOneWithTip(scopeName, nodes, url, displayName, keyName)
 }
@@ -582,7 +587,10 @@ export const getProxyRouteChain = (name: string) => {
 }
 
 export const getProxyGroupChains = (name: string) => {
-  return [name, ...getProxyRouteChain(name).filter((routeName) => proxyGroupList.value.includes(routeName))]
+  return [
+    name,
+    ...getProxyRouteChain(name).filter((routeName) => proxyGroupList.value.includes(routeName)),
+  ]
 }
 
 export const getProxyFullChains = (name: string) => {
