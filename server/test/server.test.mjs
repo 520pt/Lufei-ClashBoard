@@ -448,6 +448,48 @@ rule-providers:
   assert.equal(second.content, first.content)
 })
 
+test('custom rule YAML apply removes legacy single custom policy group', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: 自定义-直连, type: select, proxies: [DIRECT]}
+  - {name: 自定义-代理, <<: *default}
+  - {name: 自定义, <<: *default}
+
+rules:
+  - RULE-SET,LuFei / Custom,自定义
+  - MATCH,DIRECT
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  LuFei / Custom: {<<: *class, url: "http://old-host:2048/ziyong.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.equal(result.changed, true)
+  assert.equal(result.removedLegacyProxyGroups, 1)
+  assert.equal(result.removedLegacyRules, 1)
+  assert.doesNotMatch(result.content, /\{name: 自定义, <<: \*default\}/)
+  assert.doesNotMatch(result.content, /RULE-SET,LuFei \/ Custom,自定义\n/)
+  assert.match(result.content, /\{name: 自定义-代理, <<: \*default\}/)
+  assert.match(result.content, /\{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
+  assert.match(result.content, /RULE-SET,LuFei \/ Custom,自定义-代理/)
+  assert.match(result.content, /RULE-SET,LuFei \/ Custom Direct,自定义-直连/)
+})
+
 test('custom rule YAML apply removes duplicate custom proxy groups', () => {
   const source = `default: &default
   type: select

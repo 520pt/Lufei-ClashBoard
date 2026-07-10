@@ -61,6 +61,7 @@ const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '自定义-代理'
 const DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP = '自定义-直连'
 const DEFAULT_CUSTOM_RULE_FILE_NAME = 'ziyong.list'
 const DEFAULT_CUSTOM_RULE_DIRECT_FILE_NAME = 'ziyong-direct.list'
+const LEGACY_CUSTOM_RULE_POLICY_GROUPS = ['自定义']
 const CUSTOM_RULE_POLICY_PROXY = 'proxy'
 const CUSTOM_RULE_POLICY_DIRECT = 'direct'
 const accessSessionSecret = randomBytes(32).toString('hex')
@@ -925,6 +926,20 @@ const removeProxyGroupsByName = (lines, policyGroup) => {
   return matchedEntries.length
 }
 
+const removeYamlRulesByProviderAndPolicy = (lines, providerName, policyGroup) => {
+  const rule = `- RULE-SET,${providerName},${policyGroup}`
+  let removedCount = 0
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (String(lines[index] || '').trim() === rule) {
+      lines.splice(index, 1)
+      removedCount += 1
+    }
+  }
+
+  return removedCount
+}
+
 const parsedYamlIncludesCustomRule = (parsed, providerName, policyGroup) => {
   const rule = `RULE-SET,${providerName},${policyGroup}`
 
@@ -1027,6 +1042,8 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     addedProxyGroup: false,
     removedDuplicateProxyGroups: 0,
     removedConflictingProxyGroups: 0,
+    removedLegacyProxyGroups: 0,
+    removedLegacyRules: 0,
     policyGroup,
     directPolicyGroup,
   }
@@ -1055,6 +1072,19 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
       result.changed = true
     }
   }
+
+  LEGACY_CUSTOM_RULE_POLICY_GROUPS.forEach((legacyPolicyGroup) => {
+    if (legacyPolicyGroup === policyGroup || legacyPolicyGroup === directPolicyGroup) {
+      return
+    }
+
+    result.removedLegacyProxyGroups += removeProxyGroupsByName(lines, legacyPolicyGroup)
+    result.removedLegacyRules += removeYamlRulesByProviderAndPolicy(
+      lines,
+      providerName,
+      legacyPolicyGroup,
+    )
+  })
 
   result.removedDuplicateProxyGroups =
     removeDuplicateProxyGroupsByName(lines, policyGroup) +
@@ -1148,6 +1178,8 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.addedRule ||
     result.addedProxyGroup ||
     result.removedConflictingProxyGroups > 0 ||
+    result.removedLegacyProxyGroups > 0 ||
+    result.removedLegacyRules > 0 ||
     result.removedDuplicateProxyGroups > 0
   result.content = lines.join('\n')
 
@@ -2138,6 +2170,8 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       updatedProvider: applyResult.updatedProvider,
       addedRule: applyResult.addedRule,
       addedProxyGroup: applyResult.addedProxyGroup,
+      removedLegacyProxyGroups: applyResult.removedLegacyProxyGroups,
+      removedLegacyRules: applyResult.removedLegacyRules,
     }
   })
 }
