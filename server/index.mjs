@@ -5894,6 +5894,14 @@ app.get('/api/custom-rules', async (req, res) => {
   }
 })
 
+app.get('/api/lufei-clashboard/ping', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({
+    app: 'Lufei-ClashBoard',
+    ok: true,
+  })
+})
+
 app.post('/api/custom-rules', async (req, res) => {
   try {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)

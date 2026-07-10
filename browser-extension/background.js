@@ -1,8 +1,24 @@
 const DEFAULT_SETTINGS = {
-  serverUrl: 'http://10.0.0.11:2048',
+  serverUrl: 'http://127.0.0.1:2048',
   defaultPolicy: 'proxy',
   preferRootDomain: true,
 }
+
+const LUFEI_PANEL_PORT = 2048
+const LUFEI_PANEL_PING_PATH = '/api/lufei-clashboard/ping'
+const LAN_SCAN_TIMEOUT_MS = 650
+const LAN_SCAN_CONCURRENCY = 32
+const LAN_SCAN_SUBNETS = [
+  '10.0.0',
+  '10.0.1',
+  '192.168.1',
+  '192.168.0',
+  '192.168.31',
+  '192.168.2',
+  '192.168.50',
+  '172.16.0',
+]
+const LAN_SCAN_PRIORITY_HOSTS = [10, 11, 18, 20, 2, 3, 5, 100, 101, 200, 254, 1]
 
 const POLICY_LABELS = {
   proxy: '代理',
@@ -68,6 +84,110 @@ const saveSettings = async (settings) => {
     defaultPolicy: settings.defaultPolicy === 'direct' ? 'direct' : 'proxy',
     preferRootDomain: settings.preferRootDomain !== false,
   })
+}
+
+const fetchJsonWithTimeout = async (url, timeoutMs = LAN_SCAN_TIMEOUT_MS) => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+
+    if (!response.ok) return null
+
+    return await response.json().catch(() => null)
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const isLufeiClashBoard = async (serverUrl) => {
+  const baseUrl = normalizeServerUrl(serverUrl)
+  const ping = await fetchJsonWithTimeout(`${baseUrl}${LUFEI_PANEL_PING_PATH}`)
+
+  if (ping?.app === 'Lufei-ClashBoard') {
+    return true
+  }
+
+  const customRules = await fetchJsonWithTimeout(`${baseUrl}/api/custom-rules`)
+
+  return (
+    Array.isArray(customRules?.rules) &&
+    customRules?.settings?.fileName === 'ziyong.list' &&
+    customRules?.settings?.directFileName === 'ziyong-direct.list'
+  )
+}
+
+const buildLanScanCandidates = () => {
+  const candidates = []
+  const seen = new Set()
+  const addCandidate = (host) => {
+    const serverUrl = `http://${host}:${LUFEI_PANEL_PORT}`
+
+    if (!seen.has(serverUrl)) {
+      seen.add(serverUrl)
+      candidates.push(serverUrl)
+    }
+  }
+
+  LAN_SCAN_SUBNETS.forEach((subnet) => {
+    LAN_SCAN_PRIORITY_HOSTS.forEach((host) => addCandidate(`${subnet}.${host}`))
+  })
+
+  LAN_SCAN_SUBNETS.forEach((subnet) => {
+    for (let host = 1; host <= 254; host += 1) {
+      addCandidate(`${subnet}.${host}`)
+    }
+  })
+
+  return candidates
+}
+
+const findLufeiPanelOnLan = async () => {
+  const candidates = buildLanScanCandidates()
+  let index = 0
+  let matchedUrl = ''
+
+  const worker = async () => {
+    while (!matchedUrl && index < candidates.length) {
+      const serverUrl = candidates[index]
+      index += 1
+
+      if (await isLufeiClashBoard(serverUrl)) {
+        matchedUrl = serverUrl
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: LAN_SCAN_CONCURRENCY }, worker))
+
+  return matchedUrl
+}
+
+const autoDetectServerUrlOnInstall = async () => {
+  const stored = await chrome.storage.sync.get(['serverUrl'])
+  const storedServerUrl = normalizeServerUrl(stored.serverUrl)
+
+  if (stored.serverUrl && storedServerUrl !== DEFAULT_SETTINGS.serverUrl) {
+    return
+  }
+
+  if (await isLufeiClashBoard(DEFAULT_SETTINGS.serverUrl)) {
+    await chrome.storage.sync.set({ serverUrl: DEFAULT_SETTINGS.serverUrl })
+    return
+  }
+
+  const detectedServerUrl = await findLufeiPanelOnLan()
+
+  if (detectedServerUrl) {
+    await chrome.storage.sync.set({ serverUrl: detectedServerUrl })
+  }
 }
 
 const isIpv4Address = (host) => {
@@ -260,7 +380,15 @@ const createContextMenus = () => {
   })
 }
 
-chrome.runtime.onInstalled.addListener(createContextMenus)
+chrome.runtime.onInstalled.addListener((details) => {
+  createContextMenus()
+
+  if (details.reason === 'install' || details.reason === 'update') {
+    autoDetectServerUrlOnInstall().catch((error) => {
+      console.warn('[LuFei] 自动检测面板地址失败', error)
+    })
+  }
+})
 chrome.runtime.onStartup.addListener(createContextMenus)
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
