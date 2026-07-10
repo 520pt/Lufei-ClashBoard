@@ -56,6 +56,7 @@ const ACCESS_PASSWORD_ENABLED_KEY = 'config/access-password-enabled'
 const ACCESS_PASSWORD_KEY = 'config/access-password'
 const SETUP_API_LIST_KEY = 'setup/api-list'
 const SETUP_ACTIVE_UUID_KEY = 'setup/active-uuid'
+const MANAGED_STORAGE_PREFIXES = ['config/', 'setup/']
 const RULE_PROVIDER_SOURCE_METADATA_KEY = 'rule-provider-cache/source-metadata'
 const ACCESS_SESSION_COOKIE_NAME = 'ange_clashboard_access_session'
 const ACCESS_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
@@ -2415,13 +2416,30 @@ const readSnapshot = () => {
   return snapshot
 }
 
-const replaceSnapshot = (entries) => {
+const isManagedStorageKey = (key) => {
+  return MANAGED_STORAGE_PREFIXES.some((prefix) => String(key || '').startsWith(prefix))
+}
+
+const replaceSnapshot = (entries, options = {}) => {
+  const preserveUnmanaged = options.preserveUnmanaged ?? true
   db.exec('BEGIN')
 
   try {
-    db.prepare('DELETE FROM app_storage WHERE key != ?').run(backgroundImageStorageKey)
+    if (preserveUnmanaged) {
+      db.prepare(
+        `DELETE FROM app_storage
+         WHERE key != ?
+           AND (${MANAGED_STORAGE_PREFIXES.map(() => 'key LIKE ?').join(' OR ')})`,
+      ).run(backgroundImageStorageKey, ...MANAGED_STORAGE_PREFIXES.map((prefix) => `${prefix}%`))
+    } else {
+      db.prepare('DELETE FROM app_storage WHERE key != ?').run(backgroundImageStorageKey)
+    }
 
     for (const [key, value] of Object.entries(entries)) {
+      if (preserveUnmanaged && !isManagedStorageKey(key)) {
+        continue
+      }
+
       insertSnapshotStatement.run(key, value)
     }
 
@@ -2430,6 +2448,10 @@ const replaceSnapshot = (entries) => {
     db.exec('ROLLBACK')
     throw error
   }
+}
+
+const replaceSnapshotForTesting = (entries) => {
+  replaceSnapshot(entries, { preserveUnmanaged: false })
 }
 
 const isValidEntries = (entries) => {
@@ -6435,7 +6457,8 @@ export {
   readCustomRules,
   readCustomRulesSettings,
   readSnapshot,
-  replaceSnapshot,
+  replaceSnapshot as replaceManagedSnapshotForTesting,
+  replaceSnapshotForTesting as replaceSnapshot,
   resolveOpenClashConfigPathFromUci as resolveOpenClashConfigPathFromUciForTesting,
   restoreCustomRulesFromBackupIfMissing as restoreCustomRulesFromBackupForTesting,
   searchRuleProviderCache,

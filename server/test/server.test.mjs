@@ -42,6 +42,8 @@ const {
   readCustomRuleListText,
   readCustomRules,
   readCustomRulesSettings,
+  readSnapshot,
+  replaceManagedSnapshotForTesting,
   replaceSnapshot,
   restoreCustomRulesFromBackupForTesting,
   resolveOpenClashConfigPathFromUciForTesting,
@@ -925,6 +927,20 @@ test('custom rules restore from latest backup when storage is empty', async () =
   assert.deepEqual(readCustomRules('proxy'), ['DOMAIN-SUFFIX,restore-check.example'])
   assert.equal(readCustomRulesSettings().policyGroup, 'restored-group')
   assert.deepEqual((await fs.readdir(backupDir)).sort(), ['latest-non-empty.json', 'latest.json'])
+})
+
+test('managed settings import preserves custom rules', () => {
+  replaceSnapshot({})
+
+  addCustomRule({ target: 'preserve-import.example', policy: 'proxy' })
+
+  replaceManagedSnapshotForTesting({
+    'config/theme': 'dark',
+    'setup/api-list': '[]',
+  })
+
+  assert.deepEqual(readCustomRules('proxy'), ['DOMAIN-SUFFIX,preserve-import.example'])
+  assert.equal(readSnapshot()['config/theme'], 'dark')
 })
 
 test('proxy group penetration cache expires when provider cache changes', () => {
