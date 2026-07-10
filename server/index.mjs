@@ -1085,6 +1085,23 @@ const removeYamlRulesByProviderAndPolicy = (lines, providerName, policyGroup) =>
   return removedCount
 }
 
+const removeYamlRulesByProviderExceptPolicy = (lines, providerName, policyGroup) => {
+  const rulePrefix = `- RULE-SET,${providerName},`
+  const currentRule = `${rulePrefix}${policyGroup}`
+  let removedCount = 0
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = String(lines[index] || '').trim()
+
+    if (line.startsWith(rulePrefix) && line !== currentRule) {
+      lines.splice(index, 1)
+      removedCount += 1
+    }
+  }
+
+  return removedCount
+}
+
 const parsedYamlIncludesProxyProvider = (parsed, providerName) => {
   return Boolean(parsed?.['proxy-providers']?.[providerName])
 }
@@ -1213,6 +1230,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     removedConflictingProxyGroups: 0,
     removedLegacyProxyGroups: 0,
     removedLegacyRules: 0,
+    removedStaleProviderRules: 0,
     normalizedProxyGroupOrder: false,
     normalizedProviderOrder: false,
     normalizedRuleOrder: false,
@@ -1257,6 +1275,10 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
       legacyPolicyGroup,
     )
   })
+
+  result.removedStaleProviderRules =
+    removeYamlRulesByProviderExceptPolicy(lines, providerName, policyGroup) +
+    removeYamlRulesByProviderExceptPolicy(lines, directProviderName, directPolicyGroup)
 
   result.removedDuplicateProxyGroups =
     removeDuplicateProxyGroupsByName(lines, policyGroup) +
@@ -1408,6 +1430,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.removedConflictingProxyGroups > 0 ||
     result.removedLegacyProxyGroups > 0 ||
     result.removedLegacyRules > 0 ||
+    result.removedStaleProviderRules > 0 ||
     result.removedDuplicateProxyGroups > 0
   result.content = lines.join('\n')
 
@@ -2401,6 +2424,7 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       updatedProxyGroup: applyResult.updatedProxyGroup,
       removedLegacyProxyGroups: applyResult.removedLegacyProxyGroups,
       removedLegacyRules: applyResult.removedLegacyRules,
+      removedStaleProviderRules: applyResult.removedStaleProviderRules,
     }
   })
 }

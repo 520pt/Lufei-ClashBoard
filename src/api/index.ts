@@ -528,6 +528,7 @@ export type ApplyCustomRuleYamlResult = {
   removedDuplicateProxyGroups?: number
   removedLegacyProxyGroups?: number
   removedLegacyRules?: number
+  removedStaleProviderRules?: number
 }
 
 export const fetchCustomRulesAPI = async () => {

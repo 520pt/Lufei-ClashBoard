@@ -409,6 +409,14 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 
 const getPolicyLabel = (policy: CustomRulePolicy) => (policy === 'direct' ? '直连' : '代理')
 
+type CustomRuleRefreshResult = 'updated' | 'restarted' | 'failed'
+
+const getRefreshStatusText = (status: CustomRuleRefreshResult) => {
+  if (status === 'updated') return '，规则源已刷新'
+  if (status === 'restarted') return '，核心已重启并刷新'
+  return ''
+}
+
 const refreshRuntimeRulesAndProxies = async () => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const results = await Promise.allSettled([fetchProxies(), fetchRules()])
@@ -442,19 +450,39 @@ const ensureCustomPolicyGroupIcon = (name: string, icon: string) => {
   })
 }
 
-const refreshCustomRuleProvider = async (policy: CustomRulePolicy) => {
+const refreshCustomRuleProvider = async (
+  policy: CustomRulePolicy,
+): Promise<CustomRuleRefreshResult> => {
   const providerName =
     policy === 'direct'
       ? customRules.value?.settings.directProviderName
       : customRules.value?.settings.providerName
 
-  if (!providerName) return false
+  if (!providerName) return 'failed'
 
   try {
     await updateRuleProviderAPI(providerName, { skipErrorNotification: true })
     await fetchRules()
-    return true
+    return 'updated'
   } catch (error) {
+    showNotification({
+      content: `规则已保存，但${getPolicyLabel(policy)}规则源刷新失败，正在尝试重启核心让规则生效...`,
+      type: 'alert-warning',
+      timeout: 4200,
+    })
+
+    try {
+      await restartCoreAPI()
+    } catch {
+      await reloadConfigsAPI().catch(() => null)
+    }
+
+    const runtimeRefreshed = await refreshRuntimeRulesAndProxies()
+
+    if (runtimeRefreshed) {
+      return 'restarted'
+    }
+
     showNotification({
       content: `规则已保存，但${getPolicyLabel(policy)}规则源暂未刷新。请先点击“一键写入当前 YAML”并等待核心重启；如果已经写入，请确认 YAML 里的规则地址是 OpenWrt 可访问的 NAS/局域网 IP。详情：${
         error instanceof Error ? error.message : String(error)
@@ -462,7 +490,7 @@ const refreshCustomRuleProvider = async (policy: CustomRulePolicy) => {
       type: 'alert-warning',
       timeout: 9000,
     })
-    return false
+    return 'failed'
   }
 }
 
@@ -474,15 +502,15 @@ const handleAddRule = async () => {
     const result = await addCustomRuleAPI(target.value, kind.value, selectedPolicy)
     target.value = ''
     await loadCustomRules()
-    const refreshed = await refreshCustomRuleProvider(selectedPolicy)
+    const refreshStatus = await refreshCustomRuleProvider(selectedPolicy)
     showNotification({
       content: result.added
-        ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule}${refreshed ? '，规则源已刷新' : ''}`
-        : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule}${
-            refreshed ? '，规则源已刷新' : ''
-          }`,
+        ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule}${getRefreshStatusText(refreshStatus)}`
+        : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule}${getRefreshStatusText(
+            refreshStatus,
+          )}`,
       type: result.added ? 'alert-success' : 'alert-info',
-      timeout: 2200,
+      timeout: refreshStatus === 'failed' ? 3200 : 2400,
     })
   } catch (error) {
     showNotification({
@@ -510,13 +538,13 @@ const confirmDeleteRule = async () => {
     deleteDialogVisible.value = false
     pendingDeleteEntry.value = null
     await loadCustomRules()
-    const refreshed = await refreshCustomRuleProvider(entry.policy)
+    const refreshStatus = await refreshCustomRuleProvider(entry.policy)
     showNotification({
-      content: `已删除${getPolicyLabel(entry.policy)}规则：${entry.rule}${
-        refreshed ? '，规则源已刷新' : ''
-      }`,
+      content: `已删除${getPolicyLabel(entry.policy)}规则：${entry.rule}${getRefreshStatusText(
+        refreshStatus,
+      )}`,
       type: 'alert-success',
-      timeout: 2200,
+      timeout: refreshStatus === 'failed' ? 3200 : 2400,
     })
   } catch (error) {
     showNotification({

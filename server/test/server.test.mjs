@@ -593,6 +593,49 @@ rule-providers:
   assert.match(result.content, /  - \{name: 自定义-直连, <<: \*default\}/)
 })
 
+test('custom rule YAML apply removes stale custom provider policy references', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: 自定义-代理, <<: *default}
+  - {name: 路飞, <<: *default}
+
+rules:
+  - RULE-SET,LuFei / Custom,路飞
+  - RULE-SET,LuFei / Custom Direct,旧直连
+  - RULE-SET,GitHub / Domain,GitHub
+  - MATCH,其他
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  LuFei / Custom: {<<: *class, url: "http://10.0.0.10:2048/ziyong.list"}
+  LuFei / Custom Direct: {<<: *class, url: "http://10.0.0.10:2048/ziyong-direct.list"}
+  GitHub / Domain: {<<: *class, url: "https://example.test/github.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.equal(result.removedStaleProviderRules, 2)
+  assert.doesNotMatch(result.content, /RULE-SET,LuFei \/ Custom,路飞/)
+  assert.doesNotMatch(result.content, /RULE-SET,LuFei \/ Custom Direct,旧直连/)
+  assert.match(
+    result.content,
+    /  - RULE-SET,LuFei \/ Custom,自定义-代理\n  - RULE-SET,LuFei \/ Custom Direct,自定义-直连\n  - RULE-SET,GitHub \/ Domain,GitHub/,
+  )
+})
+
 test('custom rule YAML apply removes duplicate custom proxy groups', () => {
   const source = `default: &default
   type: select
