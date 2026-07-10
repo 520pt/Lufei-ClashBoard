@@ -5160,6 +5160,34 @@ const startBackgroundRuleRefresh = async (options = {}) => {
   }
 }
 
+const startCustomRuleProviderRefresh = async (policy) => {
+  const settings = readCustomRulesSettings()
+  const providerName =
+    normalizeCustomRulePolicy(policy) === CUSTOM_RULE_POLICY_DIRECT
+      ? settings.directProviderName
+      : settings.providerName
+
+  if (!providerName) {
+    return {
+      ok: false,
+      started: false,
+      message: '自定义规则源名称为空',
+    }
+  }
+
+  try {
+    return await startBackgroundRuleRefresh({ providerName })
+  } catch (error) {
+    return {
+      ok: false,
+      started: false,
+      providerName,
+      message: getErrorMessage(error),
+      code: getErrorCode(error),
+    }
+  }
+}
+
 const cancelBackgroundRuleRefresh = () => {
   let cancelled = false
 
@@ -5875,8 +5903,9 @@ app.post('/api/custom-rules', async (req, res) => {
       policy: req.body?.policy || CUSTOM_RULE_POLICY_PROXY,
     })
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+    const refresh = await startCustomRuleProviderRefresh(result.policy)
 
-    res.json({ ...result, cacheSync })
+    res.json({ ...result, cacheSync, refresh })
   } catch (error) {
     res.status(400).json({
       message: getErrorMessage(error),

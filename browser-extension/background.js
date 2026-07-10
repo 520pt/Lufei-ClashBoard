@@ -10,8 +10,11 @@ const POLICY_LABELS = {
 }
 
 const RULE_KIND_LABELS = {
+  auto: '自动识别',
   domain_suffix: 'DOMAIN-SUFFIX',
+  domain: 'DOMAIN',
   ip_cidr: 'IP-CIDR',
+  raw: '原始规则',
 }
 
 const KNOWN_TWO_PART_SUFFIXES = new Set([
@@ -181,13 +184,23 @@ const notify = async (title, message) => {
   })
 }
 
-const addCurrentTabRule = async ({ policy, target: targetOverride, url } = {}) => {
+const normalizeRuleKind = (kind, fallback = 'domain_suffix') => {
+  const normalized = String(kind || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+
+  return Object.prototype.hasOwnProperty.call(RULE_KIND_LABELS, normalized) ? normalized : fallback
+}
+
+const addCurrentTabRule = async ({ policy, kind, target: targetOverride, url } = {}) => {
   const settings = await getSettings()
   const tab = await getActiveTab()
   const detected = String(targetOverride || '').trim()
     ? detectRuleFromHost({ host: targetOverride, preferRootDomain: settings.preferRootDomain })
     : detectRuleFromUrl({ url: url || tab?.url || '', preferRootDomain: settings.preferRootDomain })
   const finalPolicy = policy || settings.defaultPolicy
+  const finalKind = normalizeRuleKind(kind, detected.kind)
 
   if (!detected.target) {
     throw new Error('当前页面不是可添加的 http/https 网站')
@@ -195,7 +208,7 @@ const addCurrentTabRule = async ({ policy, target: targetOverride, url } = {}) =
 
   const result = await addCustomRule({
     target: detected.target,
-    kind: detected.kind,
+    kind: finalKind,
     policy: finalPolicy,
     serverUrl: settings.serverUrl,
   })
@@ -209,8 +222,8 @@ const addCurrentTabRule = async ({ policy, target: targetOverride, url } = {}) =
     ...result,
     target: detected.target,
     policy: finalPolicy,
-    kind: detected.kind,
-    kindLabel: detected.kindLabel,
+    kind: finalKind,
+    kindLabel: finalKind === 'auto' ? detected.kindLabel : RULE_KIND_LABELS[finalKind],
     serverUrl: settings.serverUrl,
   }
 }

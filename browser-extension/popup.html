@@ -71,6 +71,21 @@
         </div>
 
         <label class="field">
+          <span class="label">规则类型</span>
+          <select
+            id="rule-kind"
+            class="select"
+          >
+            <option value="auto">自动识别</option>
+            <option value="domain_suffix">DOMAIN-SUFFIX</option>
+            <option value="domain">DOMAIN</option>
+            <option value="ip_cidr">IP-CIDR</option>
+            <option value="raw">原始规则</option>
+          </select>
+          <span class="hint">会按当前网页自动选中，也可以手动切换。</span>
+        </label>
+
+        <label class="field">
           <span class="label">手动目标，可留空</span>
           <input
             id="manual-target"

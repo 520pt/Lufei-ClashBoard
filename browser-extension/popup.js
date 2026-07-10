@@ -1,5 +1,6 @@
 const targetEl = document.querySelector('#target')
 const kindEl = document.querySelector('#kind')
+const ruleKindEl = document.querySelector('#rule-kind')
 const statusEl = document.querySelector('#status')
 const serverUrlEl = document.querySelector('#server-url')
 const manualTargetEl = document.querySelector('#manual-target')
@@ -15,6 +16,14 @@ let currentPolicy = 'proxy'
 let currentDetected = { target: '', kind: 'domain_suffix', kindLabel: 'DOMAIN-SUFFIX' }
 let currentSettings = null
 let manualDetectTimer = 0
+
+const KIND_LABELS = {
+  auto: '自动识别',
+  domain_suffix: 'DOMAIN-SUFFIX',
+  domain: 'DOMAIN',
+  ip_cidr: 'IP-CIDR',
+  raw: '原始规则',
+}
 
 const sendMessage = (message) => {
   return new Promise((resolve) => {
@@ -36,9 +45,24 @@ const setPolicy = (policy) => {
 
 const renderDetected = (detected) => {
   currentDetected = detected || { target: '', kind: 'domain_suffix', kindLabel: 'DOMAIN-SUFFIX' }
+  const detectedKind = currentDetected.kind || 'domain_suffix'
+  const autoOption = ruleKindEl.querySelector('option[value="auto"]')
+
+  if (autoOption) {
+    autoOption.textContent = currentDetected.target
+      ? `自动识别（${currentDetected.kindLabel || KIND_LABELS[detectedKind] || detectedKind}）`
+      : '自动识别'
+  }
+
+  if (detectedKind && ruleKindEl.value === 'auto') {
+    ruleKindEl.value = detectedKind
+  } else if (detectedKind && ruleKindEl.dataset.touched !== 'true') {
+    ruleKindEl.value = detectedKind
+  }
+
   targetEl.textContent = currentDetected.target || '当前页面不可添加'
   kindEl.textContent = currentDetected.target
-    ? `规则类型：${currentDetected.kindLabel}`
+    ? `已自动识别：${currentDetected.kindLabel}`
     : '规则类型：无法识别'
 }
 
@@ -148,6 +172,7 @@ addButton.addEventListener('click', async () => {
     const response = await sendMessage({
       type: 'add-current-tab-rule',
       policy: currentPolicy,
+      kind: ruleKindEl.value,
       target: manualTarget || undefined,
     })
 
@@ -157,7 +182,15 @@ addButton.addEventListener('click', async () => {
 
     const result = response.result
     renderDetected({ target: result.target, kind: result.kind, kindLabel: result.kindLabel })
-    setStatus(`${result.added ? '已添加' : '已存在'}：${result.rule}`, 'ok')
+    const refreshText = result.refresh?.started
+      ? '，已自动刷新规则源'
+      : result.refresh?.ok
+        ? '，规则源正在刷新'
+        : result.refresh?.message
+          ? `，规则已保存但刷新失败：${result.refresh.message}`
+          : ''
+
+    setStatus(`${result.added ? '已添加' : '已存在'}：${result.rule}${refreshText}`, 'ok')
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error')
   } finally {
@@ -178,6 +211,10 @@ refreshButton.addEventListener('click', async () => {
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error')
   }
+})
+
+ruleKindEl.addEventListener('change', () => {
+  ruleKindEl.dataset.touched = 'true'
 })
 
 refreshCurrentTab().catch((error) => {
