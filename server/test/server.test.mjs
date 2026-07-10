@@ -349,8 +349,11 @@ rule-providers:
 
   const first = applyCustomRuleProviderToYamlContentForTesting(source, {
     providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
     policyGroup: '路飞',
+    directPolicyGroup: '路飞直连',
     ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
   })
 
   assert.equal(first.changed, true)
@@ -361,14 +364,24 @@ rule-providers:
     first.content,
     /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"\}/,
   )
-  assert.match(first.content, /  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,TEST \/ Domain,Test/)
+  assert.match(
+    first.content,
+    /  LuFei \/ Custom Direct: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong-direct\.list"\}/,
+  )
+  assert.match(
+    first.content,
+    /  - RULE-SET,LuFei \/ Custom Direct,路飞直连\n  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,TEST \/ Domain,Test/,
+  )
   assert.match(first.content, /  - \{name: 路飞, <<: \*default\}/)
-  assert.match(first.content, /  - \{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
+  assert.match(first.content, /  - \{name: 路飞直连, type: select, proxies: \[DIRECT\]\}/)
 
   const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
     providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
     policyGroup: '路飞',
+    directPolicyGroup: '路飞直连',
     ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
   })
 
   assert.equal(second.changed, false)
@@ -452,9 +465,11 @@ test('custom rules manager generates rules and snippets', () => {
 
   assert.deepEqual(readCustomRulesSettings(), {
     providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
     policyGroup: '自定义-代理',
     directPolicyGroup: '自定义-直连',
     fileName: 'ziyong.list',
+    directFileName: 'ziyong-direct.list',
   })
 
   assert.equal(makeCustomRule('Example.COM'), 'DOMAIN-SUFFIX,example.com')
@@ -462,34 +477,47 @@ test('custom rules manager generates rules and snippets', () => {
   assert.equal(makeCustomRule('1.2.3.4'), 'IP-CIDR,1.2.3.4/32,no-resolve')
   assert.equal(makeCustomRule('10.0.0.0/8'), 'IP-CIDR,10.0.0.0/8,no-resolve')
 
-  const first = addCustomRule({ target: 'example.com' })
-  const second = addCustomRule({ target: 'https://example.com/a' })
-  addCustomRule({ target: '1.2.3.4' })
+  const first = addCustomRule({ target: 'example.com', policy: 'proxy' })
+  const second = addCustomRule({ target: 'https://example.com/a', policy: 'proxy' })
+  const direct = addCustomRule({ target: 'www.baidu.com', policy: 'direct' })
+  addCustomRule({ target: '1.2.3.4', policy: 'proxy' })
 
   assert.equal(first.added, true)
   assert.equal(second.added, false)
-  assert.deepEqual(readCustomRules(), [
+  assert.equal(direct.added, true)
+  assert.deepEqual(readCustomRules('proxy'), [
     'DOMAIN-SUFFIX,example.com',
     'IP-CIDR,1.2.3.4/32,no-resolve',
   ])
+  assert.deepEqual(readCustomRules('direct'), ['DOMAIN-SUFFIX,www.baidu.com'])
   assert.equal(
-    readCustomRuleListText(),
+    readCustomRuleListText('proxy'),
     'DOMAIN-SUFFIX,example.com\nIP-CIDR,1.2.3.4/32,no-resolve\n',
   )
+  assert.equal(readCustomRuleListText('direct'), 'DOMAIN-SUFFIX,www.baidu.com\n')
 
   updateCustomRulesSettings({ policyGroup: 'lufei' })
   assert.equal(readCustomRulesSettings().policyGroup, 'lufei')
   assert.equal(readCustomRulesSettings().directPolicyGroup, '自定义-直连')
   assert.equal(
-    buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').ruleLine,
-    'RULE-SET,LuFei / Custom,lufei',
+    buildCustomRuleSnippets(
+      'http://10.0.0.10:2048/ziyong.list',
+      'http://10.0.0.10:2048/ziyong-direct.list',
+    ).ruleLine,
+    'RULE-SET,LuFei / Custom,lufei\nRULE-SET,LuFei / Custom Direct,自定义-直连',
   )
   assert.match(
-    buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').proxyGroupLine,
+    buildCustomRuleSnippets(
+      'http://10.0.0.10:2048/ziyong.list',
+      'http://10.0.0.10:2048/ziyong-direct.list',
+    ).proxyGroupLine,
     /name: lufei, <<: \*default/,
   )
   assert.match(
-    buildCustomRuleSnippets('http://10.0.0.10:2048/ziyong.list').proxyGroupLine,
+    buildCustomRuleSnippets(
+      'http://10.0.0.10:2048/ziyong.list',
+      'http://10.0.0.10:2048/ziyong-direct.list',
+    ).proxyGroupLine,
     /name: 自定义-直连, type: select, proxies: \[DIRECT\]/,
   )
 })

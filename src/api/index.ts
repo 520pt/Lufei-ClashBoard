@@ -469,17 +469,27 @@ export const fetchBackendUpdateAvailableAPI = async () => {
   return false
 }
 
+export type CustomRulePolicy = 'proxy' | 'direct'
+
+export type CustomRuleEntry = {
+  rule: string
+  policy: CustomRulePolicy
+}
+
 export type CustomRulesSettings = {
   providerName: string
+  directProviderName: string
   policyGroup: string
   directPolicyGroup: string
   fileName: string
+  directFileName: string
 }
 
 export type CustomRulesPayload = {
-  rules: string[]
+  rules: CustomRuleEntry[]
   settings: CustomRulesSettings
   ruleUrl: string
+  directRuleUrl: string
   snippets: {
     proxyGroupLine: string
     providerLine: string
@@ -517,14 +527,18 @@ export const fetchCustomRulesAPI = async () => {
   return (await response.json()) as CustomRulesPayload
 }
 
-export const addCustomRuleAPI = async (target: string, kind = 'auto') => {
+export const addCustomRuleAPI = async (
+  target: string,
+  kind = 'auto',
+  policy: CustomRulePolicy = 'proxy',
+) => {
   const response = await fetchServerApi('/api/custom-rules', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({ target, kind }),
+    body: JSON.stringify({ target, kind, policy }),
   })
 
   const data = await response.json().catch(() => ({}))
@@ -533,17 +547,22 @@ export const addCustomRuleAPI = async (target: string, kind = 'auto') => {
     throw new Error(data?.message || `Failed to add custom rule: ${response.status}`)
   }
 
-  return data as { rule: string; added: boolean; rules: string[] }
+  return data as {
+    rule: string
+    policy: CustomRulePolicy
+    added: boolean
+    rules: CustomRuleEntry[]
+  }
 }
 
-export const deleteCustomRuleAPI = async (rule: string) => {
+export const deleteCustomRuleAPI = async (rule: string, policy: CustomRulePolicy = 'proxy') => {
   const response = await fetchServerApi('/api/custom-rules', {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({ rule }),
+    body: JSON.stringify({ rule, policy }),
   })
 
   const data = await response.json().catch(() => ({}))
@@ -552,7 +571,7 @@ export const deleteCustomRuleAPI = async (rule: string) => {
     throw new Error(data?.message || `Failed to delete custom rule: ${response.status}`)
   }
 
-  return data as { removed: boolean; rules: string[] }
+  return data as { removed: boolean; rules: CustomRuleEntry[] }
 }
 
 export const updateCustomRulesSettingsAPI = async (settings: Partial<CustomRulesSettings>) => {

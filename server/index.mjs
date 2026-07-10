@@ -56,9 +56,13 @@ const RULE_SOURCE_SSH_REQUIRED_CODE = 'RULE_SOURCE_SSH_REQUIRED'
 const CUSTOM_RULES_KEY = 'custom-rules/list'
 const CUSTOM_RULES_SETTINGS_KEY = 'custom-rules/settings'
 const DEFAULT_CUSTOM_RULE_PROVIDER_NAME = 'LuFei / Custom'
+const DEFAULT_CUSTOM_RULE_DIRECT_PROVIDER_NAME = 'LuFei / Custom Direct'
 const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '自定义-代理'
 const DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP = '自定义-直连'
 const DEFAULT_CUSTOM_RULE_FILE_NAME = 'ziyong.list'
+const DEFAULT_CUSTOM_RULE_DIRECT_FILE_NAME = 'ziyong-direct.list'
+const CUSTOM_RULE_POLICY_PROXY = 'proxy'
+const CUSTOM_RULE_POLICY_DIRECT = 'direct'
 const accessSessionSecret = randomBytes(32).toString('hex')
 const configuredRuleProviderAutoRefreshCheckMs = Number.parseInt(
   String(process.env.ZASHBOARD_RULE_PROVIDER_CACHE_AUTO_REFRESH_CHECK_MS || ''),
@@ -502,24 +506,78 @@ const makeCustomRule = (target, kind = 'auto') => {
   throw new Error(`不支持的规则类型: ${kind}`)
 }
 
-const readCustomRules = () => {
+const normalizeCustomRulePolicy = (policy) => {
+  return policy === CUSTOM_RULE_POLICY_DIRECT ? CUSTOM_RULE_POLICY_DIRECT : CUSTOM_RULE_POLICY_PROXY
+}
+
+const readCustomRuleEntries = () => {
   const row = getStorageValueStatement.get(CUSTOM_RULES_KEY)
   const value = parseStoredJson(row?.value, [])
 
-  return Array.isArray(value)
-    ? value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
-    : []
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const seen = new Set()
+  const entries = []
+
+  value.forEach((item) => {
+    const rule =
+      typeof item === 'string'
+        ? item.trim()
+        : item && typeof item === 'object' && typeof item.rule === 'string'
+          ? item.rule.trim()
+          : ''
+
+    if (!rule) return
+
+    const policy =
+      item && typeof item === 'object'
+        ? normalizeCustomRulePolicy(item.policy)
+        : CUSTOM_RULE_POLICY_PROXY
+    const key = `${policy}\n${rule}`
+
+    if (seen.has(key)) return
+
+    seen.add(key)
+    entries.push({ rule, policy })
+  })
+
+  return entries
 }
 
-const writeCustomRules = (rules) => {
-  const uniqueRules = [...new Set(rules.map((item) => String(item || '').trim()).filter(Boolean))]
-  upsertStorageValueStatement.run(CUSTOM_RULES_KEY, JSON.stringify(uniqueRules))
+const writeCustomRuleEntries = (entries) => {
+  const seen = new Set()
+  const uniqueEntries = []
 
-  return uniqueRules
+  entries.forEach((entry) => {
+    const rule = String(entry?.rule || '').trim()
+    if (!rule) return
+
+    const policy = normalizeCustomRulePolicy(entry?.policy)
+    const key = `${policy}\n${rule}`
+
+    if (seen.has(key)) return
+
+    seen.add(key)
+    uniqueEntries.push({ rule, policy })
+  })
+
+  upsertStorageValueStatement.run(CUSTOM_RULES_KEY, JSON.stringify(uniqueEntries))
+
+  return uniqueEntries
 }
 
-const readCustomRuleListText = () => {
-  const rules = readCustomRules()
+const readCustomRules = (policy = CUSTOM_RULE_POLICY_PROXY) => {
+  const normalizedPolicy = normalizeCustomRulePolicy(policy)
+
+  return readCustomRuleEntries()
+    .filter((entry) => entry.policy === normalizedPolicy)
+    .map((entry) => entry.rule)
+}
+
+const readCustomRuleListText = (policy = CUSTOM_RULE_POLICY_PROXY) => {
+  const rules = readCustomRules(policy)
 
   return rules.length ? `${rules.join('\n')}\n` : ''
 }
@@ -533,6 +591,10 @@ const readCustomRulesSettings = () => {
       typeof settings.providerName === 'string' && settings.providerName.trim()
         ? settings.providerName.trim()
         : DEFAULT_CUSTOM_RULE_PROVIDER_NAME,
+    directProviderName:
+      typeof settings.directProviderName === 'string' && settings.directProviderName.trim()
+        ? settings.directProviderName.trim()
+        : DEFAULT_CUSTOM_RULE_DIRECT_PROVIDER_NAME,
     policyGroup:
       typeof settings.policyGroup === 'string' && settings.policyGroup.trim()
         ? settings.policyGroup.trim()
@@ -545,6 +607,10 @@ const readCustomRulesSettings = () => {
       typeof settings.fileName === 'string' && settings.fileName.trim()
         ? settings.fileName.trim().replace(/^\/+/, '')
         : DEFAULT_CUSTOM_RULE_FILE_NAME,
+    directFileName:
+      typeof settings.directFileName === 'string' && settings.directFileName.trim()
+        ? settings.directFileName.trim().replace(/^\/+/, '')
+        : DEFAULT_CUSTOM_RULE_DIRECT_FILE_NAME,
   }
 }
 
@@ -555,6 +621,10 @@ const updateCustomRulesSettings = (settings = {}) => {
       typeof settings.providerName === 'string' && settings.providerName.trim()
         ? settings.providerName.trim()
         : current.providerName,
+    directProviderName:
+      typeof settings.directProviderName === 'string' && settings.directProviderName.trim()
+        ? settings.directProviderName.trim()
+        : current.directProviderName,
     policyGroup:
       typeof settings.policyGroup === 'string' && settings.policyGroup.trim()
         ? settings.policyGroup.trim()
@@ -567,6 +637,10 @@ const updateCustomRulesSettings = (settings = {}) => {
       typeof settings.fileName === 'string' && settings.fileName.trim()
         ? settings.fileName.trim().replace(/^\/+/, '')
         : current.fileName,
+    directFileName:
+      typeof settings.directFileName === 'string' && settings.directFileName.trim()
+        ? settings.directFileName.trim().replace(/^\/+/, '')
+        : current.directFileName,
   }
 
   upsertStorageValueStatement.run(CUSTOM_RULES_SETTINGS_KEY, JSON.stringify(next))
@@ -574,7 +648,7 @@ const updateCustomRulesSettings = (settings = {}) => {
   return next
 }
 
-const buildCustomRuleSnippets = (ruleUrl) => {
+const buildCustomRuleSnippets = (ruleUrl, directRuleUrl) => {
   const settings = readCustomRulesSettings()
 
   return {
@@ -582,8 +656,14 @@ const buildCustomRuleSnippets = (ruleUrl) => {
       `- {name: ${settings.policyGroup}, <<: *default}`,
       `- {name: ${settings.directPolicyGroup}, type: select, proxies: [DIRECT]}`,
     ].join('\n'),
-    providerLine: `${settings.providerName}: {<<: *class, url: "${ruleUrl}"}`,
-    ruleLine: `RULE-SET,${settings.providerName},${settings.policyGroup}`,
+    providerLine: [
+      `${settings.providerName}: {<<: *class, url: "${ruleUrl}"}`,
+      `${settings.directProviderName}: {<<: *class, url: "${directRuleUrl}"}`,
+    ].join('\n'),
+    ruleLine: [
+      `RULE-SET,${settings.providerName},${settings.policyGroup}`,
+      `RULE-SET,${settings.directProviderName},${settings.directPolicyGroup}`,
+    ].join('\n'),
   }
 }
 
@@ -842,10 +922,24 @@ const buildDirectPolicyGroupLine = (policyGroup) => {
   return `  - {name: ${policyGroup}, type: select, proxies: [DIRECT]}`
 }
 
+const buildDirectRuleUrlFromRuleUrl = (ruleUrl) => {
+  try {
+    const url = new URL(ruleUrl)
+    url.pathname = `/${DEFAULT_CUSTOM_RULE_DIRECT_FILE_NAME}`
+    return url.toString()
+  } catch {
+    return ruleUrl.replace(/\/[^/?#]*([?#].*)?$/, `/${DEFAULT_CUSTOM_RULE_DIRECT_FILE_NAME}$1`)
+  }
+}
+
 const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
   const providerName = normalizeYamlInlineValue(
     options.providerName,
     DEFAULT_CUSTOM_RULE_PROVIDER_NAME,
+  )
+  const directProviderName = normalizeYamlInlineValue(
+    options.directProviderName,
+    DEFAULT_CUSTOM_RULE_DIRECT_PROVIDER_NAME,
   )
   const requestedPolicyGroup = normalizeYamlInlineValue(
     options.policyGroup,
@@ -856,8 +950,12 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     DEFAULT_CUSTOM_RULE_DIRECT_POLICY_GROUP,
   )
   const ruleUrl = normalizeYamlInlineValue(options.ruleUrl, '')
+  const directRuleUrl = normalizeYamlInlineValue(
+    options.directRuleUrl,
+    ruleUrl ? buildDirectRuleUrlFromRuleUrl(ruleUrl) : '',
+  )
 
-  if (!ruleUrl) {
+  if (!ruleUrl || !directRuleUrl) {
     throw new Error('Custom rule URL is required.')
   }
 
@@ -948,12 +1046,41 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.addedRule = true
   }
 
+  if (
+    !parsedYamlIncludesCustomRule(parsed, directProviderName, directPolicyGroup) &&
+    !yamlLinesIncludeCustomRule(lines, directProviderName, directPolicyGroup)
+  ) {
+    if (
+      !insertLineIntoYamlSection(
+        lines,
+        'rules',
+        `  - RULE-SET,${directProviderName},${directPolicyGroup}`,
+      )
+    ) {
+      throw new Error('rules section was not found in the active YAML.')
+    }
+    result.addedRule = true
+  }
+
   if (!parsedYamlIncludesCustomProvider(parsed, providerName)) {
     if (
       !insertLineIntoYamlSection(
         lines,
         'rule-providers',
         `  ${providerName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(ruleUrl)}"}`,
+      )
+    ) {
+      throw new Error('rule-providers section was not found in the active YAML.')
+    }
+    result.addedProvider = true
+  }
+
+  if (!parsedYamlIncludesCustomProvider(parsed, directProviderName)) {
+    if (
+      !insertLineIntoYamlSection(
+        lines,
+        'rule-providers',
+        `  ${directProviderName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(directRuleUrl)}"}`,
       )
     ) {
       throw new Error('rule-providers section was not found in the active YAML.')
@@ -972,31 +1099,37 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
   return result
 }
 
-const addCustomRule = ({ target, kind = 'auto' }) => {
+const addCustomRule = ({ target, kind = 'auto', policy = CUSTOM_RULE_POLICY_PROXY }) => {
   const rule = makeCustomRule(target, kind)
-  const rules = readCustomRules()
+  const normalizedPolicy = normalizeCustomRulePolicy(policy)
+  const rules = readCustomRuleEntries()
 
-  if (rules.includes(rule)) {
+  if (rules.some((entry) => entry.rule === rule && entry.policy === normalizedPolicy)) {
     return {
       rule,
+      policy: normalizedPolicy,
       added: false,
       rules,
     }
   }
 
-  const nextRules = writeCustomRules([...rules, rule])
+  const nextRules = writeCustomRuleEntries([...rules, { rule, policy: normalizedPolicy }])
 
   return {
     rule,
+    policy: normalizedPolicy,
     added: true,
     rules: nextRules,
   }
 }
 
-const deleteCustomRule = (rule) => {
-  const rules = readCustomRules()
+const deleteCustomRule = (rule, policy = CUSTOM_RULE_POLICY_PROXY) => {
+  const rules = readCustomRuleEntries()
   const target = String(rule || '').trim()
-  const nextRules = rules.filter((item) => item !== target)
+  const normalizedPolicy = normalizeCustomRulePolicy(policy)
+  const nextRules = rules.filter(
+    (item) => item.rule !== target || item.policy !== normalizedPolicy,
+  )
 
   if (nextRules.length === rules.length) {
     return {
@@ -1007,7 +1140,7 @@ const deleteCustomRule = (rule) => {
 
   return {
     removed: true,
-    rules: writeCustomRules(nextRules),
+    rules: writeCustomRuleEntries(nextRules),
   }
 }
 
@@ -1899,11 +2032,15 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
     const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
     const settings = readCustomRulesSettings()
     const currentContent = await readRemoteFile(client, snapshot.configPath)
+    const directRuleUrl = new URL(ruleUrl)
+    directRuleUrl.pathname = `/${settings.directFileName}`
     const applyResult = applyCustomRuleProviderToYamlContent(currentContent, {
       providerName: settings.providerName,
+      directProviderName: settings.directProviderName,
       policyGroup: settings.policyGroup,
       directPolicyGroup: settings.directPolicyGroup,
       ruleUrl,
+      directRuleUrl: directRuleUrl.toString(),
     })
     let backupPath = ''
 
@@ -5093,19 +5230,27 @@ app.get('/api/custom-rules', (req, res) => {
   const settings = readCustomRulesSettings()
   const protocol = req.get('x-forwarded-proto') || req.protocol || 'http'
   const hostHeader = req.get('host') || `127.0.0.1:${port}`
+  const openWrtHost = readOpenWrtRuleSourceSshConfig().host
   const ruleUrl = buildPublicCustomRuleUrl({
     protocol,
     hostHeader,
     fileName: settings.fileName,
-    openWrtHost: readOpenWrtRuleSourceSshConfig().host,
+    openWrtHost,
+  })
+  const directRuleUrl = buildPublicCustomRuleUrl({
+    protocol,
+    hostHeader,
+    fileName: settings.directFileName,
+    openWrtHost,
   })
 
   res.setHeader('Cache-Control', 'no-store')
   res.json({
-    rules: readCustomRules(),
+    rules: readCustomRuleEntries(),
     settings,
     ruleUrl,
-    snippets: buildCustomRuleSnippets(ruleUrl),
+    directRuleUrl,
+    snippets: buildCustomRuleSnippets(ruleUrl, directRuleUrl),
   })
 })
 
@@ -5114,6 +5259,7 @@ app.post('/api/custom-rules', (req, res) => {
     const result = addCustomRule({
       target: req.body?.target,
       kind: req.body?.kind || 'auto',
+      policy: req.body?.policy || CUSTOM_RULE_POLICY_PROXY,
     })
 
     res.json(result)
@@ -5125,7 +5271,7 @@ app.post('/api/custom-rules', (req, res) => {
 })
 
 app.delete('/api/custom-rules', (req, res) => {
-  const result = deleteCustomRule(req.body?.rule)
+  const result = deleteCustomRule(req.body?.rule, req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
 
   res.json(result)
 })
@@ -5136,7 +5282,9 @@ app.post('/api/custom-rules/settings', (req, res) => {
       policyGroup: req.body?.policyGroup,
       directPolicyGroup: req.body?.directPolicyGroup,
       providerName: req.body?.providerName,
+      directProviderName: req.body?.directProviderName,
       fileName: req.body?.fileName,
+      directFileName: req.body?.directFileName,
     })
 
     res.json({ settings })
@@ -5150,7 +5298,13 @@ app.post('/api/custom-rules/settings', (req, res) => {
 app.get('/ziyong.list', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.type('text/plain')
-  res.send(readCustomRuleListText())
+  res.send(readCustomRuleListText(CUSTOM_RULE_POLICY_PROXY))
+})
+
+app.get('/ziyong-direct.list', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.type('text/plain')
+  res.send(readCustomRuleListText(CUSTOM_RULE_POLICY_DIRECT))
 })
 
 app.get('/sw.js', (_req, res) => {

@@ -6,6 +6,7 @@
           <div class="flex flex-wrap items-center gap-2">
             <div class="text-xl font-semibold">自定义规则集</div>
             <div class="badge badge-primary badge-sm">ziyong.list</div>
+            <div class="badge badge-success badge-sm">ziyong-direct.list</div>
             <div class="badge badge-ghost badge-sm">
               {{ customRules?.rules.length || 0 }} 条规则
             </div>
@@ -48,7 +49,15 @@
             type="button"
             @click="copyText(customRules?.ruleUrl || '')"
           >
-            {{ customRules?.ruleUrl || '-' }}
+            <span class="text-primary mr-2 font-sans">代理</span>{{ customRules?.ruleUrl || '-' }}
+          </button>
+          <button
+            class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
+            type="button"
+            @click="copyText(customRules?.directRuleUrl || '')"
+          >
+            <span class="text-success mr-2 font-sans">直连</span
+            >{{ customRules?.directRuleUrl || '-' }}
           </button>
           <div class="text-base-content/60 text-xs">
             把这个地址填到 YAML 的 <code>rule-providers</code> 里，OpenClash 会读取这里的规则。
@@ -59,8 +68,9 @@
           class="bg-base-200 rounded-box grid gap-2 p-3 md:grid-cols-[1fr_1fr_auto]"
           @submit.prevent="handleSaveSettings"
         >
+          <div class="text-sm font-semibold md:col-span-3">自定义</div>
           <label class="form-control min-w-0">
-            <span class="label-text mb-1 text-xs">代理策略名称</span>
+            <span class="label-text mb-1 text-xs">代理</span>
             <input
               v-model.trim="policyGroup"
               class="input input-bordered input-sm"
@@ -69,7 +79,7 @@
             />
           </label>
           <label class="form-control min-w-0">
-            <span class="label-text mb-1 text-xs">直连策略名称</span>
+            <span class="label-text mb-1 text-xs">直连</span>
             <input
               v-model.trim="directPolicyGroup"
               class="input input-bordered input-sm"
@@ -102,7 +112,7 @@
       </div>
 
       <form
-        class="grid gap-2 md:grid-cols-[1fr_180px]"
+        class="grid gap-2 md:grid-cols-[1fr_120px_180px]"
         @submit.prevent="handleAddRule"
       >
         <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -120,6 +130,13 @@
             添加规则
           </button>
         </div>
+        <select
+          v-model="targetPolicy"
+          class="select select-bordered select-sm"
+        >
+          <option value="proxy">代理</option>
+          <option value="direct">直连</option>
+        </select>
         <select
           v-model="kind"
           class="select select-bordered select-sm"
@@ -200,16 +217,24 @@
         class="flex flex-col gap-2"
       >
         <div
-          v-for="rule in customRules.rules"
-          :key="rule"
+          v-for="entry in customRules.rules"
+          :key="`${entry.policy}:${entry.rule}`"
           class="bg-base-200 rounded-box flex items-center justify-between gap-3 p-3"
         >
-          <code class="min-w-0 flex-1 text-xs break-all">{{ rule }}</code>
+          <div class="flex min-w-0 flex-1 items-center gap-2">
+            <div
+              class="badge badge-sm shrink-0"
+              :class="entry.policy === 'direct' ? 'badge-success' : 'badge-primary'"
+            >
+              {{ getPolicyLabel(entry.policy) }}
+            </div>
+            <code class="min-w-0 text-xs break-all">{{ entry.rule }}</code>
+          </div>
           <button
             class="btn btn-error btn-xs shrink-0"
             type="button"
             :disabled="submitting"
-            @click="askDeleteRule(rule)"
+            @click="askDeleteRule(entry)"
           >
             删除
           </button>
@@ -224,7 +249,12 @@
     >
       <div class="flex flex-col gap-4 text-sm">
         <div>确定要删除这条自定义规则吗？</div>
-        <code class="bg-base-200 rounded-box p-3 text-xs break-all">{{ pendingDeleteRule }}</code>
+        <div class="bg-base-200 rounded-box flex flex-col gap-2 p-3">
+          <div class="badge badge-sm w-fit">
+            {{ pendingDeleteEntry ? getPolicyLabel(pendingDeleteEntry.policy) : '-' }}
+          </div>
+          <code class="text-xs break-all">{{ pendingDeleteEntry?.rule || '-' }}</code>
+        </div>
         <div class="flex justify-end gap-2">
           <button
             class="btn btn-sm"
@@ -293,6 +323,8 @@ import {
   reloadConfigsAPI,
   updateCustomRulesSettingsAPI,
   updateRuleProviderAPI,
+  type CustomRuleEntry,
+  type CustomRulePolicy,
   type CustomRulesPayload,
 } from '@/api'
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
@@ -310,6 +342,7 @@ import { computed, onMounted, ref } from 'vue'
 const customRules = ref<CustomRulesPayload | null>(null)
 const target = ref('')
 const kind = ref('auto')
+const targetPolicy = ref<CustomRulePolicy>('proxy')
 const policyGroup = ref('自定义-代理')
 const directPolicyGroup = ref('自定义-直连')
 const loading = ref(false)
@@ -317,7 +350,7 @@ const submitting = ref(false)
 const errorMessage = ref('')
 const deleteDialogVisible = ref(false)
 const applyDialogVisible = ref(false)
-const pendingDeleteRule = ref('')
+const pendingDeleteEntry = ref<CustomRuleEntry | null>(null)
 
 const snippets = computed(() => [
   {
@@ -360,6 +393,8 @@ const copyText = async (value: string) => {
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
+const getPolicyLabel = (policy: CustomRulePolicy) => (policy === 'direct' ? '直连' : '代理')
+
 const refreshRuntimeRulesAndProxies = async () => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const results = await Promise.allSettled([fetchProxies(), fetchRules()])
@@ -393,8 +428,11 @@ const ensureCustomPolicyGroupIcon = (name: string, icon: string) => {
   })
 }
 
-const refreshCustomRuleProvider = async () => {
-  const providerName = customRules.value?.settings.providerName
+const refreshCustomRuleProvider = async (policy: CustomRulePolicy) => {
+  const providerName =
+    policy === 'direct'
+      ? customRules.value?.settings.directProviderName
+      : customRules.value?.settings.providerName
 
   if (!providerName) return false
 
@@ -404,7 +442,9 @@ const refreshCustomRuleProvider = async () => {
     return true
   } catch (error) {
     showNotification({
-      content: `规则已保存，但规则源暂未刷新：${error instanceof Error ? error.message : String(error)}`,
+      content: `规则已保存，但${getPolicyLabel(policy)}规则源暂未刷新：${
+        error instanceof Error ? error.message : String(error)
+      }`,
       type: 'alert-warning',
       timeout: 5000,
     })
@@ -416,14 +456,17 @@ const handleAddRule = async () => {
   submitting.value = true
 
   try {
-    const result = await addCustomRuleAPI(target.value, kind.value)
+    const selectedPolicy = targetPolicy.value
+    const result = await addCustomRuleAPI(target.value, kind.value, selectedPolicy)
     target.value = ''
     await loadCustomRules()
-    const refreshed = await refreshCustomRuleProvider()
+    const refreshed = await refreshCustomRuleProvider(selectedPolicy)
     showNotification({
       content: result.added
-        ? `已添加：${result.rule}${refreshed ? '，规则源已刷新' : ''}`
-        : `已存在：${result.rule}${refreshed ? '，规则源已刷新' : ''}`,
+        ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule}${refreshed ? '，规则源已刷新' : ''}`
+        : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule}${
+            refreshed ? '，规则源已刷新' : ''
+          }`,
       type: result.added ? 'alert-success' : 'alert-info',
       timeout: 2200,
     })
@@ -437,25 +480,27 @@ const handleAddRule = async () => {
   }
 }
 
-const askDeleteRule = (rule: string) => {
-  pendingDeleteRule.value = rule
+const askDeleteRule = (entry: CustomRuleEntry) => {
+  pendingDeleteEntry.value = entry
   deleteDialogVisible.value = true
 }
 
 const confirmDeleteRule = async () => {
-  if (!pendingDeleteRule.value) return
+  if (!pendingDeleteEntry.value) return
 
   submitting.value = true
 
   try {
-    const rule = pendingDeleteRule.value
-    await deleteCustomRuleAPI(rule)
+    const entry = pendingDeleteEntry.value
+    await deleteCustomRuleAPI(entry.rule, entry.policy)
     deleteDialogVisible.value = false
-    pendingDeleteRule.value = ''
+    pendingDeleteEntry.value = null
     await loadCustomRules()
-    const refreshed = await refreshCustomRuleProvider()
+    const refreshed = await refreshCustomRuleProvider(entry.policy)
     showNotification({
-      content: `已删除：${rule}${refreshed ? '，规则源已刷新' : ''}`,
+      content: `已删除${getPolicyLabel(entry.policy)}规则：${entry.rule}${
+        refreshed ? '，规则源已刷新' : ''
+      }`,
       type: 'alert-success',
       timeout: 2200,
     })
