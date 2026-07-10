@@ -16,6 +16,7 @@ Lufei-ClashBoard 是基于 Vue 3、TypeScript、Vite、Express 的 Clash / Mihom
 - 路飞自用面板设置一键导入
 - 路飞策略组默认图标配置
 - Docker / 本地 Node.js 部署
+- Chrome / Microsoft Edge 浏览器插件，一键把当前网站加入自定义代理或直连规则
 
 ## 自定义规则集
 
@@ -121,6 +122,130 @@ powershell -ExecutionPolicy Bypass -File scripts/restart-docker.ps1
 ```text
 http://服务器IP:2048
 ```
+
+
+## 浏览器插件
+
+项目内置 Chrome / Microsoft Edge 通用的 Manifest V3 插件，目录：
+
+```text
+browser-extension
+```
+
+插件用于把当前网页一键添加到 Lufei-ClashBoard 自定义规则集，适合日常浏览时快速把域名加入“自定义-代理”或“自定义-直连”。
+
+### 插件功能
+
+- 点击插件图标，直接在弹窗里完成全部操作
+- 默认面板地址为 `http://127.0.0.1:2048`
+- 首次安装会自动扫描常见局域网地址的 `2048` 端口，确认是 Lufei-ClashBoard 后自动填入面板地址
+- 弹窗内可手动设置面板地址并测试连接
+- 自动识别当前网页：
+  - 域名网页 → `DOMAIN-SUFFIX`
+  - IP 网页 → `IP-CIDR`
+- 规则类型会自动选中识别结果，也可以手动改成 `DOMAIN` / `IP-CIDR` / `原始规则`
+- 添加成功后会自动请求面板刷新对应的自定义规则源
+- 支持添加到：
+  - 自定义-代理
+  - 自定义-直连
+- 支持手动填写目标，例如：
+  - `example.com`
+  - `1.1.1.1`
+  - `https://www.example.com/path`
+- 支持右键菜单：
+  - 添加当前网站到自定义代理
+  - 添加当前网站到自定义直连
+
+### 安装到 Chrome
+
+1. 打开 `chrome://extensions/`
+2. 开启右上角“开发者模式”
+3. 点击“加载已解压的扩展程序”
+4. 选择本项目目录下的 `browser-extension`
+
+### 安装到 Edge
+
+1. 打开 `edge://extensions/`
+2. 开启左侧“开发人员模式”
+3. 点击“加载解压缩的扩展”
+4. 选择本项目目录下的 `browser-extension`
+
+### 插件使用
+
+#### 方式一：点击插件图标
+
+1. 打开任意网站
+2. 点击浏览器右上角 LuFei 插件图标
+3. 首次安装后插件会自动尝试发现局域网内的面板；如果没有发现，就会显示默认地址：
+
+```text
+http://127.0.0.1:2048
+```
+
+4. 如需手动设置，在弹窗内填写“面板地址”，例如：
+
+```text
+http://10.0.0.11:2048
+```
+
+5. 点击“测试连接”确认可访问
+6. 确认或手动修改“规则类型”
+7. 选择“代理”或“直连”
+8. 点击“添加到自定义规则”
+
+#### 方式二：右键菜单
+
+在网页里右键：
+
+- 添加当前网站到自定义代理
+- 添加当前网站到自定义直连
+
+### 插件面板地址说明
+
+不要填 OpenWrt 无法访问的 `127.0.0.1`。如果部署在 NAS 上，填 NAS 的局域网地址，例如：
+
+```text
+http://10.0.0.20:2048
+```
+
+如果部署在当前电脑，通常填当前电脑的局域网 IP，例如：
+
+```text
+http://10.0.0.11:2048
+```
+
+### 插件调用接口
+
+插件调用当前面板的接口：
+
+```http
+POST /api/custom-rules
+```
+
+域名网页请求示例：
+
+```json
+{
+  "target": "example.com",
+  "kind": "domain_suffix",
+  "policy": "proxy"
+}
+```
+
+IP 网页请求示例：
+
+```json
+{
+  "target": "1.1.1.1",
+  "kind": "ip_cidr",
+  "policy": "direct"
+}
+```
+
+`policy` 可选：
+
+- `proxy`：自定义代理
+- `direct`：自定义直连
 
 ## 规则源 SSH 用途
 
