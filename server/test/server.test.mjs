@@ -31,6 +31,7 @@ const {
   getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
+  getProxyGroupRulePenetrationCacheEntryForTesting,
   getRequestAccessAuthStatusForTesting,
   isLikelyClashControllerResultForTesting,
   makeCustomRule,
@@ -809,4 +810,59 @@ test('custom rule providers are synced to local rule cache', async () => {
 
   assert.equal(proxySearch.matches[0]?.name, 'LuFei / Custom')
   assert.equal(directSearch.matches[0]?.name, 'LuFei / Custom Direct')
+})
+
+test('proxy group penetration cache expires when provider cache changes', () => {
+  seedRuleProviderCacheForTesting([
+    {
+      name: 'LuFei / Custom',
+      behavior: 'classical',
+      format: 'text',
+      url: 'http://10.0.0.10:2048/ziyong.list',
+      body: '',
+    },
+  ])
+
+  const rules = [
+    {
+      type: 'RuleSet',
+      payload: 'LuFei / Custom',
+      proxy: '自定义-代理',
+      index: 0,
+    },
+  ]
+  const emptyEntry = getProxyGroupRulePenetrationCacheEntryForTesting({
+    groupName: '自定义-代理',
+    rules,
+  })
+
+  assert.equal(emptyEntry.items.length, 0)
+
+  seedRuleProviderCacheForTesting([
+    {
+      name: 'LuFei / Custom',
+      behavior: 'classical',
+      format: 'text',
+      url: 'http://10.0.0.10:2048/ziyong.list',
+      body: 'DOMAIN-SUFFIX,example.com\n',
+    },
+  ])
+
+  assert.throws(
+    () =>
+      getProxyGroupRulePenetrationCacheEntryForTesting({
+        groupName: '自定义-代理',
+        cacheKey: emptyEntry.cacheKey,
+        rules,
+      }),
+    /cache expired/,
+  )
+
+  const refreshedEntry = getProxyGroupRulePenetrationCacheEntryForTesting({
+    groupName: '自定义-代理',
+    rules,
+  })
+
+  assert.equal(refreshedEntry.items.length, 1)
+  assert.equal(refreshedEntry.items[0].content, 'example.com')
 })

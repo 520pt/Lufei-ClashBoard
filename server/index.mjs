@@ -241,6 +241,13 @@ const getRuleProviderCacheTotalCountStatement = db.prepare(`
   ) AS total
   FROM rule_provider_cache
 `)
+const getRuleProviderCacheRevisionStatement = db.prepare(`
+  SELECT
+    COUNT(*) AS provider_count,
+    COALESCE(SUM(LENGTH(body)), 0) AS body_bytes,
+    COALESCE(MAX(updated_at), '') AS updated_at
+  FROM rule_provider_cache
+`)
 let activeRuleProviderUpdatePromise = null
 let activeRuleProviderUpdateController = null
 let ruleProviderAutoRefreshTimer = null
@@ -3323,6 +3330,7 @@ const buildProxyGroupRulePenetrationSignature = (groupName, rules, options = {})
         groupName,
         customGroup: options.customGroup === true,
         customGroupMode,
+        providerCacheRevision: getRuleProviderCacheRevision(),
         rules,
       }),
     )
@@ -3386,6 +3394,7 @@ const getProxyGroupRulePenetrationCacheEntry = ({
   pruneProxyGroupRulePenetrationCache()
   const normalizedCustomGroupMode =
     normalizeProxyGroupCustomMode(customGroupMode) || (customGroup === true ? 'all' : null)
+  const providerCacheRevision = getRuleProviderCacheRevision()
 
   if (cacheKey) {
     const cachedEntry = proxyGroupRulePenetrationCache.get(cacheKey)
@@ -3394,7 +3403,8 @@ const getProxyGroupRulePenetrationCacheEntry = ({
       !cachedEntry ||
       cachedEntry.groupName !== groupName ||
       cachedEntry.customGroup !== customGroup ||
-      cachedEntry.customGroupMode !== normalizedCustomGroupMode
+      cachedEntry.customGroupMode !== normalizedCustomGroupMode ||
+      cachedEntry.providerCacheRevision !== providerCacheRevision
     ) {
       const error = new Error('cache expired')
       error.code = 'CACHE_EXPIRED'
@@ -3433,6 +3443,7 @@ const getProxyGroupRulePenetrationCacheEntry = ({
     groupName,
     customGroup,
     customGroupMode: expanded.customGroupMode,
+    providerCacheRevision,
     totalRules: expanded.totalRules,
     items: expanded.items,
     missingProviders: expanded.missingProviders,
@@ -4411,6 +4422,17 @@ const getRuleProviderCacheProviderCounts = () => {
       .all()
       .map((provider) => [provider.name, countRulesInBody(provider.body)]),
   )
+}
+
+const getRuleProviderCacheRevision = () => {
+  const row = getRuleProviderCacheRevisionStatement.get()
+
+  return [
+    Number(row?.provider_count || 0),
+    Number(row?.body_bytes || 0),
+    String(row?.updated_at || ''),
+    getRuleProviderCacheRuleCount(),
+  ].join(':')
 }
 
 const buildRuleProviderSourceMetadata = (providers, extra = {}) => ({
@@ -5963,6 +5985,7 @@ export {
   getOpenWrtHttpSignals as getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
+  getProxyGroupRulePenetrationCacheEntry as getProxyGroupRulePenetrationCacheEntryForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
   isLikelyClashControllerResult as isLikelyClashControllerResultForTesting,
   makeCustomRule,
