@@ -421,7 +421,7 @@ const isRuntimeRuleSetType = (type: string) => {
   return type.toLowerCase().replace(/[-_\s]/g, '') === 'ruleset'
 }
 
-const isCustomRuntimeReady = () => {
+const isCustomRuntimeReady = (requireRuleCounts = true) => {
   const providerName = customRules.value?.settings.providerName || ''
   const directProviderName = customRules.value?.settings.directProviderName || ''
   const currentPolicyGroup = policyGroup.value
@@ -458,7 +458,7 @@ const isCustomRuntimeReady = () => {
         rule.proxy === currentDirectPolicyGroup,
     )
 
-  return hasExpectedRuleCounts && hasRules
+  return hasRules && (!requireRuleCounts || hasExpectedRuleCounts)
 }
 
 const refreshRuntimeRulesAndProxies = async () => {
@@ -475,11 +475,11 @@ const refreshRuntimeRulesAndProxies = async () => {
   return false
 }
 
-const waitForCustomRuntimeReady = async (attempts = 18, delay = 2500) => {
+const waitForCustomRuntimeReady = async (attempts = 18, delay = 2500, requireRuleCounts = true) => {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await Promise.allSettled([fetchProxies(), fetchRules()])
 
-    if (isCustomRuntimeReady()) {
+    if (isCustomRuntimeReady(requireRuleCounts)) {
       return true
     }
 
@@ -487,6 +487,25 @@ const waitForCustomRuntimeReady = async (attempts = 18, delay = 2500) => {
   }
 
   return false
+}
+
+const refreshAllCustomRuleProviders = async () => {
+  const providerNames = [
+    customRules.value?.settings.providerName,
+    customRules.value?.settings.directProviderName,
+  ].filter((name): name is string => Boolean(name))
+
+  if (providerNames.length !== 2) {
+    return false
+  }
+
+  await Promise.allSettled(
+    providerNames.map((providerName) =>
+      updateRuleProviderAPI(providerName, { skipErrorNotification: true }),
+    ),
+  )
+
+  return await waitForCustomRuntimeReady(10, 1500)
 }
 
 const restartCoreAndVerifyCustomRules = async () => {
@@ -498,7 +517,10 @@ const restartCoreAndVerifyCustomRules = async () => {
     restartError = error instanceof Error ? error.message : String(error)
   }
 
-  if (await waitForCustomRuntimeReady()) {
+  if (
+    (await waitForCustomRuntimeReady(18, 2500, false)) &&
+    (await refreshAllCustomRuleProviders())
+  ) {
     return true
   }
 
@@ -508,7 +530,10 @@ const restartCoreAndVerifyCustomRules = async () => {
     restartError = restartError || (error instanceof Error ? error.message : String(error))
   }
 
-  if (await waitForCustomRuntimeReady()) {
+  if (
+    (await waitForCustomRuntimeReady(18, 2500, false)) &&
+    (await refreshAllCustomRuleProviders())
+  ) {
     return true
   }
 
@@ -565,8 +590,6 @@ const refreshCustomRuleProvider = async (
 
     try {
       await restartCoreAndVerifyCustomRules()
-      await updateRuleProviderAPI(providerName, { skipErrorNotification: true }).catch(() => null)
-      await fetchRules()
       return 'restarted'
     } catch (restartError) {
       showNotification({

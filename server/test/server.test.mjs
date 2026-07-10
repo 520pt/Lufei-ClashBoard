@@ -23,6 +23,7 @@ const {
   buildCustomRuleSnippets,
   clashControllerDiscoveryPortsForTesting,
   createAccessSessionTokenForTesting,
+  extractOpenWrtVisibleClientIpv4ForTesting,
   extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUciForTesting,
@@ -324,6 +325,21 @@ test('custom rule public URL does not expose Docker bridge address', () => {
       localAddresses: ['172.17.0.2'],
     }),
     'http://127.0.0.1:2048/ziyong.list',
+  )
+})
+
+test('OpenWrt SSH connection reveals the Docker host LAN address', () => {
+  assert.equal(
+    extractOpenWrtVisibleClientIpv4ForTesting('10.0.0.11 51842 10.0.0.18 22'),
+    '10.0.0.11',
+  )
+  assert.equal(
+    extractOpenWrtVisibleClientIpv4ForTesting('172.17.0.2 51842 10.0.0.18 22'),
+    '',
+  )
+  assert.equal(
+    extractOpenWrtVisibleClientIpv4ForTesting('54.208.73.48 51842 10.0.0.18 22'),
+    '',
   )
 })
 

@@ -719,6 +719,8 @@ const selectPublicCustomRuleHost = ({ hostHeader, openWrtHost, localAddresses } 
     if (matchedAddress) {
       return matchedAddress
     }
+
+    return parsedHost || '127.0.0.1'
   }
 
   return addresses[0] || parsedHost || '127.0.0.1'
@@ -741,6 +743,86 @@ const buildPublicCustomRuleUrl = ({
   const publicPort = parsed.port ? `:${parsed.port}` : ''
 
   return `${protocol}://${publicHost}${publicPort}/${fileName}`
+}
+
+const OPENWRT_VISIBLE_CLIENT_HOST_CACHE_TTL = 5 * 60 * 1000
+let openWrtVisibleClientHostCache = {
+  openWrtHost: '',
+  address: '',
+  expiresAt: 0,
+}
+
+const extractOpenWrtVisibleClientIpv4 = (sshConnection) => {
+  const candidate = String(sshConnection || '')
+    .trim()
+    .split(/\s+/)[0]
+  const parts = parseIpv4Address(candidate)
+
+  if (!parts || isDockerBridgeIpv4Address(candidate)) {
+    return ''
+  }
+
+  const isPrivate =
+    parts[0] === 10 ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+
+  return isPrivate ? candidate : ''
+}
+
+const getOpenWrtVisibleClientIpv4 = async (openWrtHost) => {
+  const normalizedOpenWrtHost = String(openWrtHost || '').trim()
+
+  if (
+    openWrtVisibleClientHostCache.openWrtHost === normalizedOpenWrtHost &&
+    openWrtVisibleClientHostCache.expiresAt > Date.now()
+  ) {
+    return openWrtVisibleClientHostCache.address
+  }
+
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    return ''
+  }
+
+  const address = await withOpenWrtSshClient(config, async (client) => {
+    const result = await sshExec(client, `printf '%s' "$SSH_CONNECTION"`, {
+      maxBuffer: 1024,
+    })
+
+    return extractOpenWrtVisibleClientIpv4(result.stdout)
+  }).catch(() => '')
+
+  openWrtVisibleClientHostCache = {
+    openWrtHost: normalizedOpenWrtHost,
+    address,
+    expiresAt: Date.now() + OPENWRT_VISIBLE_CLIENT_HOST_CACHE_TTL,
+  }
+
+  return address
+}
+
+const resolvePublicCustomRuleLocalAddresses = async ({ hostHeader, openWrtHost }) => {
+  const selectedHost = selectPublicCustomRuleHost({ hostHeader, openWrtHost })
+
+  if (!isLoopbackPublicHost(selectedHost)) {
+    return undefined
+  }
+
+  const openWrtVisibleClientIpv4 = await getOpenWrtVisibleClientIpv4(openWrtHost)
+
+  return openWrtVisibleClientIpv4 ? [openWrtVisibleClientIpv4] : undefined
+}
+
+const shouldReplaceCustomRuleUrl = (value) => {
+  try {
+    const hostname = new URL(String(value || '')).hostname
+
+    return isLoopbackPublicHost(hostname) || isDockerBridgeIpv4Address(hostname)
+  } catch {
+    return false
+  }
 }
 
 const normalizeYamlInlineValue = (value, fallback) => {
@@ -5240,17 +5322,11 @@ app.post('/api/openwrt-rule-source/detect', async (req, res) => {
 
 app.post('/api/openwrt-rule-source/apply-custom', async (req, res) => {
   try {
-    const settings = readCustomRulesSettings()
-    const protocol = req.get('x-forwarded-proto') || req.protocol || 'http'
-    const hostHeader = req.get('host') || `127.0.0.1:${port}`
-    const sshConfig = readOpenWrtRuleSourceSshConfig()
-    const publicRuleUrl = buildPublicCustomRuleUrl({
-      protocol,
-      hostHeader,
-      fileName: settings.fileName,
-      openWrtHost: sshConfig.host,
-    })
-    const ruleUrl = normalizeYamlInlineValue(req.body?.ruleUrl, publicRuleUrl)
+    const { ruleUrl: publicRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
+    const requestedRuleUrl = normalizeYamlInlineValue(req.body?.ruleUrl, publicRuleUrl)
+    const ruleUrl = shouldReplaceCustomRuleUrl(requestedRuleUrl)
+      ? publicRuleUrl
+      : requestedRuleUrl
     const result = await applyCustomRuleProviderToOpenWrtYaml({ ruleUrl })
 
     res.json({
@@ -5604,22 +5680,28 @@ app.post('/api/proxy-group-rule-penetration', (req, res) => {
   }
 })
 
-const getCustomRulePublicUrlsFromRequest = (req) => {
+const getCustomRulePublicUrlsFromRequest = async (req) => {
   const settings = readCustomRulesSettings()
   const protocol = req.get('x-forwarded-proto') || req.protocol || 'http'
   const hostHeader = req.get('host') || `127.0.0.1:${port}`
   const openWrtHost = readOpenWrtRuleSourceSshConfig().host
+  const localAddresses = await resolvePublicCustomRuleLocalAddresses({
+    hostHeader,
+    openWrtHost,
+  })
   const ruleUrl = buildPublicCustomRuleUrl({
     protocol,
     hostHeader,
     fileName: settings.fileName,
     openWrtHost,
+    localAddresses,
   })
   const directRuleUrl = buildPublicCustomRuleUrl({
     protocol,
     hostHeader,
     fileName: settings.directFileName,
     openWrtHost,
+    localAddresses,
   })
 
   return {
@@ -5629,24 +5711,30 @@ const getCustomRulePublicUrlsFromRequest = (req) => {
   }
 }
 
-app.get('/api/custom-rules', (req, res) => {
-  const { settings, ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
-  const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+app.get('/api/custom-rules', async (req, res) => {
+  try {
+    const { settings, ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
+    const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
-  res.setHeader('Cache-Control', 'no-store')
-  res.json({
-    rules: readCustomRuleEntries(),
-    settings,
-    ruleUrl,
-    directRuleUrl,
-    cacheSync,
-    snippets: buildCustomRuleSnippets(ruleUrl, directRuleUrl),
-  })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      rules: readCustomRuleEntries(),
+      settings,
+      ruleUrl,
+      directRuleUrl,
+      cacheSync,
+      snippets: buildCustomRuleSnippets(ruleUrl, directRuleUrl),
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: getErrorMessage(error),
+    })
+  }
 })
 
-app.post('/api/custom-rules', (req, res) => {
+app.post('/api/custom-rules', async (req, res) => {
   try {
-    const { ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
+    const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const result = addCustomRule({
       target: req.body?.target,
       kind: req.body?.kind || 'auto',
@@ -5662,15 +5750,21 @@ app.post('/api/custom-rules', (req, res) => {
   }
 })
 
-app.delete('/api/custom-rules', (req, res) => {
-  const { ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
-  const result = deleteCustomRule(req.body?.rule, req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
-  const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+app.delete('/api/custom-rules', async (req, res) => {
+  try {
+    const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
+    const result = deleteCustomRule(req.body?.rule, req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
+    const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
-  res.json({ ...result, cacheSync })
+    res.json({ ...result, cacheSync })
+  } catch (error) {
+    res.status(500).json({
+      message: getErrorMessage(error),
+    })
+  }
 })
 
-app.post('/api/custom-rules/settings', (req, res) => {
+app.post('/api/custom-rules/settings', async (req, res) => {
   try {
     const settings = updateCustomRulesSettings({
       policyGroup: req.body?.policyGroup,
@@ -5680,7 +5774,7 @@ app.post('/api/custom-rules/settings', (req, res) => {
       fileName: req.body?.fileName,
       directFileName: req.body?.directFileName,
     })
-    const { ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
+    const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
     res.json({ settings, cacheSync })
@@ -5861,6 +5955,7 @@ export {
   CLASH_CONTROLLER_DISCOVERY_PORTS as clashControllerDiscoveryPortsForTesting,
   createAccessSessionToken as createAccessSessionTokenForTesting,
   db,
+  extractOpenWrtVisibleClientIpv4 as extractOpenWrtVisibleClientIpv4ForTesting,
   extractNikkiYamlConfigPathsFromProcessList as extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromText as extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUci as extractRemoteYamlConfigPathsFromUciForTesting,
