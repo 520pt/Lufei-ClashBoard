@@ -551,6 +551,47 @@ rule-providers:
   )
 })
 
+test('custom rule YAML apply prefers Hong Kong proxy when it exists in default group', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - 直连
+    - 所有-自动
+    - 所有-手动
+    - 香港-自动
+    - 香港-故转
+    - 日本-故转
+    - 拒绝
+
+proxy-groups:
+  - {name: AI, <<: *default}
+
+rules:
+  - MATCH,其他
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  TEST / Domain: {<<: *class, url: "https://example.test/Check.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.match(
+    result.content,
+    /  - \{name: 自定义-代理, type: select, proxies: \["香港-自动", "直连", "所有-自动", "所有-手动", "香港-故转", "日本-故转", "拒绝"\]\}/,
+  )
+  assert.match(result.content, /  - \{name: 自定义-直连, <<: \*default\}/)
+})
+
 test('custom rule YAML apply removes duplicate custom proxy groups', () => {
   const source = `default: &default
   type: select

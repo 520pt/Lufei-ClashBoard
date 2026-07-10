@@ -654,7 +654,7 @@ const buildCustomRuleSnippets = (ruleUrl, directRuleUrl) => {
 
   return {
     proxyGroupLine: [
-      `- {name: ${settings.policyGroup}, <<: *default}`,
+      buildProxyPolicyGroupLine(settings.policyGroup).trimStart(),
       `- {name: ${settings.directPolicyGroup}, <<: *default}`,
     ].join('\n'),
     providerLine: [
@@ -753,6 +753,8 @@ const normalizeYamlInlineValue = (value, fallback) => {
 
 const escapeYamlDoubleQuotedValue = (value) =>
   String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+
+const formatYamlFlowString = (value) => `"${escapeYamlDoubleQuotedValue(value)}"`
 
 const findTopLevelYamlSectionRange = (lines, sectionName) => {
   const sectionPattern = new RegExp(`^${sectionName}:\\s*(?:#.*)?$`)
@@ -1099,6 +1101,51 @@ const resolveCustomPolicyGroupName = (parsed, requestedPolicyGroup, fallbackPoli
   return `${requestedPolicyGroup}策略`
 }
 
+const getDefaultPolicyGroupProxyNames = (parsed) => {
+  const proxies = Array.isArray(parsed?.default?.proxies) ? parsed.default.proxies : []
+
+  return [
+    ...new Set(
+      proxies
+        .map((proxy) => String(proxy || '').trim())
+        .filter(Boolean),
+    ),
+  ]
+}
+
+const findPreferredHongKongProxyName = (proxyNames) => {
+  const exactPreferredNames = ['香港-自动', '香港-故转', '香港', 'HK', 'Hong Kong', 'HongKong']
+  const exactMatch = exactPreferredNames.find((name) => proxyNames.includes(name))
+
+  if (exactMatch) {
+    return exactMatch
+  }
+
+  return proxyNames.find((name) => /香港|Hong\s*Kong|HongKong|🇭🇰|\bHK\b/i.test(name)) || ''
+}
+
+const movePreferredProxyToFront = (proxyNames) => {
+  const preferredProxyName = findPreferredHongKongProxyName(proxyNames)
+
+  if (!preferredProxyName) {
+    return proxyNames
+  }
+
+  return [preferredProxyName, ...proxyNames.filter((name) => name !== preferredProxyName)]
+}
+
+const buildProxyPolicyGroupLine = (policyGroup, parsed) => {
+  const proxyNames = movePreferredProxyToFront(getDefaultPolicyGroupProxyNames(parsed))
+
+  if (proxyNames.length === 0 || !findPreferredHongKongProxyName(proxyNames)) {
+    return `  - {name: ${policyGroup}, <<: *default}`
+  }
+
+  return `  - {name: ${policyGroup}, type: select, proxies: [${proxyNames
+    .map(formatYamlFlowString)
+    .join(', ')}]}`
+}
+
 const buildDirectPolicyGroupLine = (policyGroup) => {
   return `  - {name: ${policyGroup}, <<: *default}`
 }
@@ -1215,7 +1262,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     removeDuplicateProxyGroupsByName(lines, policyGroup) +
     removeDuplicateProxyGroupsByName(lines, directPolicyGroup)
 
-  const proxyGroupLine = `  - {name: ${policyGroup}, <<: *default}`
+  const proxyGroupLine = buildProxyPolicyGroupLine(policyGroup, parsed)
   const directProxyGroupLine = buildDirectPolicyGroupLine(directPolicyGroup)
   const currentProxyGroupEntry = findYamlProxyGroupEntryByName(lines, policyGroup)
   const currentDirectProxyGroupEntry = findYamlProxyGroupEntryByName(lines, directPolicyGroup)
@@ -1240,17 +1287,36 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     throw new Error('proxy-groups section was not found in the active YAML.')
   }
 
+  const latestProxyGroupLines = lines.slice(latestProxyGroupEntry.start, latestProxyGroupEntry.end)
+  const proxyGroupChanged =
+    latestProxyGroupLines.length !== 1 || latestProxyGroupLines[0] !== proxyGroupLine
+
+  if (proxyGroupChanged) {
+    lines.splice(
+      latestProxyGroupEntry.start,
+      latestProxyGroupEntry.end - latestProxyGroupEntry.start,
+      proxyGroupLine,
+    )
+    result.updatedProxyGroup = true
+  }
+
+  const refreshedDirectProxyGroupEntry = findYamlProxyGroupEntryByName(lines, directPolicyGroup)
+
+  if (!refreshedDirectProxyGroupEntry) {
+    throw new Error('proxy-groups section was not found in the active YAML.')
+  }
+
   const latestDirectProxyGroupLines = lines.slice(
-    latestDirectProxyGroupEntry.start,
-    latestDirectProxyGroupEntry.end,
+    refreshedDirectProxyGroupEntry.start,
+    refreshedDirectProxyGroupEntry.end,
   )
   const directProxyGroupChanged =
     latestDirectProxyGroupLines.length !== 1 || latestDirectProxyGroupLines[0] !== directProxyGroupLine
 
   if (directProxyGroupChanged) {
     lines.splice(
-      latestDirectProxyGroupEntry.start,
-      latestDirectProxyGroupEntry.end - latestDirectProxyGroupEntry.start,
+      refreshedDirectProxyGroupEntry.start,
+      refreshedDirectProxyGroupEntry.end - refreshedDirectProxyGroupEntry.start,
       directProxyGroupLine,
     )
     result.updatedProxyGroup = true
