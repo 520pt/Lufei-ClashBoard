@@ -772,14 +772,14 @@ const findTopLevelYamlSectionRange = (lines, sectionName) => {
   }
 }
 
-const insertLineIntoYamlSection = (lines, sectionName, line) => {
+const insertLinesIntoYamlSection = (lines, sectionName, newLines) => {
   const range = findTopLevelYamlSectionRange(lines, sectionName)
 
   if (!range) {
     return false
   }
 
-  lines.splice(range.start + 1, 0, line)
+  lines.splice(range.start + 1, 0, ...newLines)
   return true
 }
 
@@ -787,28 +787,25 @@ const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\
 
 const getIndentLength = (line) => String(line || '').match(/^\s*/)?.[0]?.length || 0
 
-const upsertYamlMappingEntryInSection = (lines, sectionName, key, line) => {
-  const range = findTopLevelYamlSectionRange(lines, sectionName)
-
-  if (!range) {
-    return null
-  }
-
+const buildYamlMappingKeyPattern = (key) => {
   const escapedKey = escapeRegExp(key)
   const escapedDoubleQuotedKey = escapeRegExp(escapeYamlDoubleQuotedValue(key))
   const escapedSingleQuotedKey = escapeRegExp(String(key).replace(/'/g, "''"))
-  const keyPattern = new RegExp(
+
+  return new RegExp(
     `^\\s*(?:${escapedKey}|"${escapedDoubleQuotedKey}"|'${escapedSingleQuotedKey}')\\s*:`,
   )
-  const index = lines.findIndex((candidate, candidateIndex) => {
+}
+
+const findYamlMappingEntryIndexInSection = (lines, range, key) => {
+  const keyPattern = buildYamlMappingKeyPattern(key)
+
+  return lines.findIndex((candidate, candidateIndex) => {
     return candidateIndex > range.start && candidateIndex < range.end && keyPattern.test(candidate)
   })
+}
 
-  if (index === -1) {
-    lines.splice(range.start + 1, 0, line)
-    return { found: false, changed: true }
-  }
-
+const getYamlEntryEnd = (lines, range, index) => {
   const indentLength = getIndentLength(lines[index])
   let end = index + 1
 
@@ -822,6 +819,25 @@ const upsertYamlMappingEntryInSection = (lines, sectionName, key, line) => {
     end += 1
   }
 
+  return end
+}
+
+const upsertYamlMappingEntryInSection = (lines, sectionName, key, line) => {
+  const range = findTopLevelYamlSectionRange(lines, sectionName)
+
+  if (!range) {
+    return null
+  }
+
+  const index = findYamlMappingEntryIndexInSection(lines, range, key)
+
+  if (index === -1) {
+    lines.splice(range.start + 1, 0, line)
+    return { found: false, changed: true }
+  }
+
+  const end = getYamlEntryEnd(lines, range, index)
+
   const currentEntry = lines.slice(index, end)
   const changed = currentEntry.length !== 1 || currentEntry[0] !== line
 
@@ -830,6 +846,74 @@ const upsertYamlMappingEntryInSection = (lines, sectionName, key, line) => {
   }
 
   return { found: true, changed }
+}
+
+const ensureOrderedYamlListLinesInSection = (lines, sectionName, orderedLines) => {
+  const range = findTopLevelYamlSectionRange(lines, sectionName)
+
+  if (!range) {
+    return null
+  }
+
+  const before = lines.join('\n')
+  const expected = orderedLines.map((line) => String(line || '').trim())
+  const existingCounts = new Map(expected.map((line) => [line, 0]))
+
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    const normalizedLine = String(lines[index] || '').trim()
+
+    if (existingCounts.has(normalizedLine)) {
+      existingCounts.set(normalizedLine, existingCounts.get(normalizedLine) + 1)
+    }
+  }
+
+  for (let index = range.end - 1; index > range.start; index -= 1) {
+    if (expected.includes(String(lines[index] || '').trim())) {
+      lines.splice(index, 1)
+    }
+  }
+
+  if (!insertLinesIntoYamlSection(lines, sectionName, orderedLines)) {
+    return null
+  }
+
+  return {
+    added: [...existingCounts.values()].filter((count) => count === 0).length,
+    changed: lines.join('\n') !== before,
+  }
+}
+
+const ensureOrderedYamlMappingEntriesInSection = (lines, sectionName, entries) => {
+  const range = findTopLevelYamlSectionRange(lines, sectionName)
+
+  if (!range) {
+    return null
+  }
+
+  const before = lines.join('\n')
+  const existingCounts = new Map(entries.map((entry) => [entry.key, 0]))
+
+  entries.forEach(({ key }) => {
+    let currentRange = findTopLevelYamlSectionRange(lines, sectionName)
+    let index = findYamlMappingEntryIndexInSection(lines, currentRange, key)
+
+    while (index !== -1) {
+      existingCounts.set(key, existingCounts.get(key) + 1)
+      const end = getYamlEntryEnd(lines, currentRange, index)
+      lines.splice(index, end - index)
+      currentRange = findTopLevelYamlSectionRange(lines, sectionName)
+      index = findYamlMappingEntryIndexInSection(lines, currentRange, key)
+    }
+  })
+
+  if (!insertLinesIntoYamlSection(lines, sectionName, entries.map((entry) => entry.line))) {
+    return null
+  }
+
+  return {
+    added: [...existingCounts.values()].filter((count) => count === 0).length,
+    changed: lines.join('\n') !== before,
+  }
 }
 
 const getYamlProxyGroupNameFromEntry = (entryLines) => {
@@ -843,6 +927,65 @@ const getYamlProxyGroupNameFromEntry = (entryLines) => {
   const blockMatch = firstLine.match(/^\s*-\s*name:\s*(.+?)\s*$/)
 
   return blockMatch ? blockMatch[1].trim() : ''
+}
+
+const findYamlProxyGroupEntryByName = (lines, policyGroup) => {
+  const range = findTopLevelYamlSectionRange(lines, 'proxy-groups')
+
+  if (!range) {
+    return null
+  }
+
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    if (/^\s*-\s*/.test(lines[index])) {
+      const start = index
+      let end = range.end
+
+      for (let nextIndex = index + 1; nextIndex < range.end; nextIndex += 1) {
+        if (/^\s*-\s*/.test(lines[nextIndex])) {
+          end = nextIndex
+          break
+        }
+      }
+
+      const name = getYamlProxyGroupNameFromEntry(lines.slice(start, end))
+
+      if (name === policyGroup) {
+        return { start, end, name }
+      }
+    }
+  }
+
+  return null
+}
+
+const ensureOrderedYamlProxyGroupEntries = (lines, orderedPolicyGroups) => {
+  const range = findTopLevelYamlSectionRange(lines, 'proxy-groups')
+
+  if (!range) {
+    return null
+  }
+
+  const before = lines.join('\n')
+  const entries = []
+
+  for (const policyGroup of orderedPolicyGroups) {
+    const entry = findYamlProxyGroupEntryByName(lines, policyGroup)
+
+    if (!entry) {
+      return null
+    }
+
+    entries.push(...lines.splice(entry.start, entry.end - entry.start))
+  }
+
+  if (!insertLinesIntoYamlSection(lines, 'proxy-groups', entries)) {
+    return null
+  }
+
+  return {
+    changed: lines.join('\n') !== before,
+  }
 }
 
 const removeDuplicateProxyGroupsByName = (lines, policyGroup) => {
@@ -940,30 +1083,8 @@ const removeYamlRulesByProviderAndPolicy = (lines, providerName, policyGroup) =>
   return removedCount
 }
 
-const parsedYamlIncludesCustomRule = (parsed, providerName, policyGroup) => {
-  const rule = `RULE-SET,${providerName},${policyGroup}`
-
-  return (
-    Array.isArray(parsed?.rules) &&
-    parsed.rules.some((entry) => String(entry || '').trim() === rule)
-  )
-}
-
-const yamlLinesIncludeCustomRule = (lines, providerName, policyGroup) => {
-  const rule = `- RULE-SET,${providerName},${policyGroup}`
-
-  return lines.some((line) => String(line || '').trim() === rule)
-}
-
 const parsedYamlIncludesProxyProvider = (parsed, providerName) => {
   return Boolean(parsed?.['proxy-providers']?.[providerName])
-}
-
-const parsedYamlIncludesCustomProxyGroup = (parsed, policyGroup) => {
-  return (
-    Array.isArray(parsed?.['proxy-groups']) &&
-    parsed['proxy-groups'].some((group) => group?.name === policyGroup)
-  )
 }
 
 const resolveCustomPolicyGroupName = (parsed, requestedPolicyGroup, fallbackPolicyGroup) => {
@@ -1044,6 +1165,9 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     removedConflictingProxyGroups: 0,
     removedLegacyProxyGroups: 0,
     removedLegacyRules: 0,
+    normalizedProxyGroupOrder: false,
+    normalizedProviderOrder: false,
+    normalizedRuleOrder: false,
     policyGroup,
     directPolicyGroup,
   }
@@ -1090,53 +1214,53 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     removeDuplicateProxyGroupsByName(lines, policyGroup) +
     removeDuplicateProxyGroupsByName(lines, directPolicyGroup)
 
-  if (!parsedYamlIncludesCustomProxyGroup(parsed, policyGroup)) {
-    if (
-      !insertLineIntoYamlSection(lines, 'proxy-groups', `  - {name: ${policyGroup}, <<: *default}`)
-    ) {
+  const proxyGroupLine = `  - {name: ${policyGroup}, <<: *default}`
+  const directProxyGroupLine = buildDirectPolicyGroupLine(directPolicyGroup)
+  const currentProxyGroupEntry = findYamlProxyGroupEntryByName(lines, policyGroup)
+  const currentDirectProxyGroupEntry = findYamlProxyGroupEntryByName(lines, directPolicyGroup)
+
+  if (!currentProxyGroupEntry && !currentDirectProxyGroupEntry) {
+    if (!insertLinesIntoYamlSection(lines, 'proxy-groups', [proxyGroupLine, directProxyGroupLine])) {
       throw new Error('proxy-groups section was not found in the active YAML.')
     }
     result.addedProxyGroup = true
-  }
-
-  if (!parsedYamlIncludesCustomProxyGroup(parsed, directPolicyGroup)) {
-    if (
-      !insertLineIntoYamlSection(
-        lines,
-        'proxy-groups',
-        buildDirectPolicyGroupLine(directPolicyGroup),
-      )
-    ) {
-      throw new Error('proxy-groups section was not found in the active YAML.')
-    }
+  } else if (!currentProxyGroupEntry) {
+    lines.splice(currentDirectProxyGroupEntry.start, 0, proxyGroupLine)
+    result.addedProxyGroup = true
+  } else if (!currentDirectProxyGroupEntry) {
+    lines.splice(currentProxyGroupEntry.end, 0, directProxyGroupLine)
     result.addedProxyGroup = true
   }
 
-  if (
-    !parsedYamlIncludesCustomRule(parsed, providerName, policyGroup) &&
-    !yamlLinesIncludeCustomRule(lines, providerName, policyGroup)
-  ) {
-    if (!insertLineIntoYamlSection(lines, 'rules', `  - RULE-SET,${providerName},${policyGroup}`)) {
-      throw new Error('rules section was not found in the active YAML.')
-    }
-    result.addedRule = true
+  const latestProxyGroupEntry = findYamlProxyGroupEntryByName(lines, policyGroup)
+  const latestDirectProxyGroupEntry = findYamlProxyGroupEntryByName(lines, directPolicyGroup)
+
+  if (!latestProxyGroupEntry || !latestDirectProxyGroupEntry) {
+    throw new Error('proxy-groups section was not found in the active YAML.')
   }
 
-  if (
-    !parsedYamlIncludesCustomRule(parsed, directProviderName, directPolicyGroup) &&
-    !yamlLinesIncludeCustomRule(lines, directProviderName, directPolicyGroup)
-  ) {
-    if (
-      !insertLineIntoYamlSection(
-        lines,
-        'rules',
-        `  - RULE-SET,${directProviderName},${directPolicyGroup}`,
-      )
-    ) {
-      throw new Error('rules section was not found in the active YAML.')
-    }
-    result.addedRule = true
+  const orderedProxyGroupResult = ensureOrderedYamlProxyGroupEntries(lines, [
+    policyGroup,
+    directPolicyGroup,
+  ])
+
+  if (!orderedProxyGroupResult) {
+    throw new Error('proxy-groups section was not found in the active YAML.')
   }
+
+  result.normalizedProxyGroupOrder = orderedProxyGroupResult.changed && !result.addedProxyGroup
+
+  const orderedRuleResult = ensureOrderedYamlListLinesInSection(lines, 'rules', [
+    `  - RULE-SET,${providerName},${policyGroup}`,
+    `  - RULE-SET,${directProviderName},${directPolicyGroup}`,
+  ])
+
+  if (!orderedRuleResult) {
+    throw new Error('rules section was not found in the active YAML.')
+  }
+
+  result.addedRule = orderedRuleResult.added > 0
+  result.normalizedRuleOrder = orderedRuleResult.changed && !result.addedRule
 
   const providerUpsertResult = upsertYamlMappingEntryInSection(
     lines,
@@ -1172,11 +1296,31 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.updatedProvider = true
   }
 
+  const orderedProviderResult = ensureOrderedYamlMappingEntriesInSection(lines, 'rule-providers', [
+    {
+      key: providerName,
+      line: `  ${providerName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(ruleUrl)}"}`,
+    },
+    {
+      key: directProviderName,
+      line: `  ${directProviderName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(directRuleUrl)}"}`,
+    },
+  ])
+
+  if (!orderedProviderResult) {
+    throw new Error('rule-providers section was not found in the active YAML.')
+  }
+
+  result.normalizedProviderOrder = orderedProviderResult.changed
+
   result.changed =
     result.addedProvider ||
     result.updatedProvider ||
     result.addedRule ||
     result.addedProxyGroup ||
+    result.normalizedProxyGroupOrder ||
+    result.normalizedProviderOrder ||
+    result.normalizedRuleOrder ||
     result.removedConflictingProxyGroups > 0 ||
     result.removedLegacyProxyGroups > 0 ||
     result.removedLegacyRules > 0 ||

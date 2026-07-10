@@ -370,7 +370,15 @@ rule-providers:
   )
   assert.match(
     first.content,
-    /  - RULE-SET,LuFei \/ Custom Direct,路飞直连\n  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,TEST \/ Domain,Test/,
+    /  - \{name: 路飞, <<: \*default\}\n  - \{name: 路飞直连, type: select, proxies: \[DIRECT\]\}\n  - \{name: AI, <<: \*default\}/,
+  )
+  assert.match(
+    first.content,
+    /  - RULE-SET,LuFei \/ Custom,路飞\n  - RULE-SET,LuFei \/ Custom Direct,路飞直连\n  - RULE-SET,TEST \/ Domain,Test/,
+  )
+  assert.match(
+    first.content,
+    /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"\}\n  LuFei \/ Custom Direct: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong-direct\.list"\}\n  TEST \/ Domain:/,
   )
   assert.match(first.content, /  - \{name: 路飞, <<: \*default\}/)
   assert.match(first.content, /  - \{name: 路飞直连, type: select, proxies: \[DIRECT\]\}/)
@@ -488,6 +496,57 @@ rule-providers:
   assert.match(result.content, /\{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
   assert.match(result.content, /RULE-SET,LuFei \/ Custom,自定义-代理/)
   assert.match(result.content, /RULE-SET,LuFei \/ Custom Direct,自定义-直连/)
+})
+
+test('custom rule YAML apply keeps proxy before direct in generated sections', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: 自定义-直连, type: select, proxies: [DIRECT]}
+  - {name: 自定义-代理, <<: *default}
+  - {name: AI, <<: *default}
+
+rules:
+  - RULE-SET,LuFei / Custom Direct,自定义-直连
+  - RULE-SET,LuFei / Custom,自定义-代理
+  - MATCH,DIRECT
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  LuFei / Custom Direct: {<<: *class, url: "http://10.0.0.10:2048/ziyong-direct.list"}
+  LuFei / Custom: {<<: *class, url: "http://10.0.0.10:2048/ziyong.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.equal(result.changed, true)
+  assert.equal(result.normalizedProxyGroupOrder, true)
+  assert.equal(result.normalizedRuleOrder, true)
+  assert.equal(result.normalizedProviderOrder, true)
+  assert.match(
+    result.content,
+    /  - \{name: 自定义-代理, <<: \*default\}\n  - \{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}\n  - \{name: AI, <<: \*default\}/,
+  )
+  assert.match(
+    result.content,
+    /  - RULE-SET,LuFei \/ Custom,自定义-代理\n  - RULE-SET,LuFei \/ Custom Direct,自定义-直连\n  - MATCH,DIRECT/,
+  )
+  assert.match(
+    result.content,
+    /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"\}\n  LuFei \/ Custom Direct: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong-direct\.list"\}/,
+  )
 })
 
 test('custom rule YAML apply removes duplicate custom proxy groups', () => {
