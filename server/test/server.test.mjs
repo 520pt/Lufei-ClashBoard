@@ -374,6 +374,40 @@ rule-providers:
   assert.equal(second.content, first.content)
 })
 
+test('custom rule YAML apply removes duplicate custom proxy groups', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: AI, <<: *default}
+  - {name: 路飞, <<: *default}
+  - {name: 路飞, <<: *default}
+  - name: 路飞
+    type: select
+    proxies:
+      - DIRECT
+
+rules:
+  - RULE-SET,LuFei / Custom,路飞
+  - MATCH,DIRECT
+
+rule-providers:
+  LuFei / Custom: {type: http, url: "http://10.0.0.10:2048/ziyong.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    policyGroup: '路飞',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+  })
+
+  assert.equal(result.changed, true)
+  assert.equal(result.removedDuplicateProxyGroups, 2)
+  assert.equal((result.content.match(/name:\s*路飞/g) || []).length, 1)
+})
+
 test('custom rules manager generates rules and snippets', () => {
   replaceSnapshot({})
 

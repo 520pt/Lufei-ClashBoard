@@ -689,6 +689,60 @@ const insertLineIntoYamlSection = (lines, sectionName, line) => {
   return true
 }
 
+const getYamlProxyGroupNameFromEntry = (entryLines) => {
+  const firstLine = entryLines[0] || ''
+  const inlineMatch = firstLine.match(/^\s*-\s*\{\s*name:\s*([^,}]+)\s*(?:[,}]|$)/)
+
+  if (inlineMatch) {
+    return inlineMatch[1].trim()
+  }
+
+  const blockMatch = firstLine.match(/^\s*-\s*name:\s*(.+?)\s*$/)
+
+  return blockMatch ? blockMatch[1].trim() : ''
+}
+
+const removeDuplicateProxyGroupsByName = (lines, policyGroup) => {
+  const range = findTopLevelYamlSectionRange(lines, 'proxy-groups')
+
+  if (!range) {
+    return 0
+  }
+
+  const entries = []
+
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    if (/^\s*-\s*/.test(lines[index])) {
+      const start = index
+      let end = range.end
+
+      for (let nextIndex = index + 1; nextIndex < range.end; nextIndex += 1) {
+        if (/^\s*-\s*/.test(lines[nextIndex])) {
+          end = nextIndex
+          break
+        }
+      }
+
+      entries.push({
+        start,
+        end,
+        name: getYamlProxyGroupNameFromEntry(lines.slice(start, end)),
+      })
+    }
+  }
+
+  const duplicatedEntries = entries
+    .filter((entry) => entry.name === policyGroup)
+    .slice(1)
+    .sort((prev, next) => next.start - prev.start)
+
+  duplicatedEntries.forEach((entry) => {
+    lines.splice(entry.start, entry.end - entry.start)
+  })
+
+  return duplicatedEntries.length
+}
+
 const parsedYamlIncludesCustomRule = (parsed, providerName, policyGroup) => {
   const rule = `RULE-SET,${providerName},${policyGroup}`
 
@@ -734,7 +788,10 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     addedProvider: false,
     addedRule: false,
     addedProxyGroup: false,
+    removedDuplicateProxyGroups: 0,
   }
+
+  result.removedDuplicateProxyGroups = removeDuplicateProxyGroupsByName(lines, policyGroup)
 
   if (!parsedYamlIncludesCustomProxyGroup(parsed, policyGroup)) {
     if (
@@ -765,7 +822,11 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.addedProvider = true
   }
 
-  result.changed = result.addedProvider || result.addedRule || result.addedProxyGroup
+  result.changed =
+    result.addedProvider ||
+    result.addedRule ||
+    result.addedProxyGroup ||
+    result.removedDuplicateProxyGroups > 0
   result.content = lines.join('\n')
 
   return result
@@ -1020,7 +1081,6 @@ const connectOpenWrtSsh = (config) => {
 
 const sshExec = (client, command, options = {}) => {
   const maxBuffer = options.maxBuffer || 8 * 1024 * 1024
-  const timeoutMs = Number(options.timeoutMs || 0)
 
   return new Promise((resolve, reject) => {
     client.exec(command, (error, stream) => {
@@ -1029,31 +1089,14 @@ const sshExec = (client, command, options = {}) => {
         return
       }
 
-      let timer = null
       let stdout = ''
       let stderr = ''
       let stdoutBytes = 0
       let stderrBytes = 0
-      const cleanup = () => {
-        if (timer) {
-          clearTimeout(timer)
-          timer = null
-        }
-      }
-
-      if (timeoutMs > 0) {
-        timer = setTimeout(() => {
-          stream.destroy(new Error(`SSH command timed out after ${timeoutMs}ms`))
-        }, timeoutMs)
-      }
 
       stream
-        .on('error', (streamError) => {
-          cleanup()
-          reject(streamError)
-        })
+        .on('error', reject)
         .on('close', (code) => {
-          cleanup()
           resolve({
             code,
             stdout,
@@ -1705,42 +1748,6 @@ const getRemoteYamlBackupPath = (configPath) => {
   return `${configPath}.lufei-${timestamp}.bak`
 }
 
-const getOpenWrtRuleSourcePluginServiceName = (plugin) => {
-  const normalizedPlugin = String(plugin || '').trim().toLowerCase()
-
-  if (normalizedPlugin === 'nikki') {
-    return 'nikki'
-  }
-
-  return 'openclash'
-}
-
-const restartOpenWrtRuleSourcePlugin = async (client, plugin) => {
-  const serviceName = getOpenWrtRuleSourcePluginServiceName(plugin)
-  const command = `if [ -x /etc/init.d/${serviceName} ]; then if command -v nohup >/dev/null 2>&1; then nohup /etc/init.d/${serviceName} restart >/tmp/lufei-${serviceName}-restart.log 2>&1 </dev/null & else ( /etc/init.d/${serviceName} restart >/tmp/lufei-${serviceName}-restart.log 2>&1 </dev/null & ); fi; printf started; else printf 'service not found: ${serviceName}' >&2; exit 127; fi`
-
-  try {
-    const result = await sshExec(client, command, {
-      maxBuffer: 64 * 1024,
-      timeoutMs: 5000,
-    })
-
-    return {
-      attempted: true,
-      serviceName,
-      started: result.code === 0,
-      message: (result.code === 0 ? result.stdout : result.stderr).trim(),
-    }
-  } catch (error) {
-    return {
-      attempted: true,
-      serviceName,
-      started: false,
-      message: getErrorMessage(error),
-    }
-  }
-}
-
 const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
   const config = readOpenWrtRuleSourceSshConfig()
 
@@ -1788,8 +1795,6 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       }
     }
 
-    const pluginReload = await restartOpenWrtRuleSourcePlugin(client, snapshot.plugin)
-
     return {
       ok: true,
       plugin: snapshot.plugin,
@@ -1799,7 +1804,6 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       addedProvider: applyResult.addedProvider,
       addedRule: applyResult.addedRule,
       addedProxyGroup: applyResult.addedProxyGroup,
-      pluginReload,
     }
   })
 }

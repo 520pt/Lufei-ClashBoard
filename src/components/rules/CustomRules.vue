@@ -429,23 +429,11 @@ const confirmApplyToYaml = async () => {
 
     showNotification({
       content: result.changed
-        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重启 ${result.pluginReload?.serviceName || result.plugin}...`
-        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重启 ${result.pluginReload?.serviceName || result.plugin}...`,
+        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重新加载配置...`
+        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重新加载配置...`,
       type: result.changed ? 'alert-success' : 'alert-info',
       timeout: 6000,
     })
-
-    if (result.pluginReload?.attempted && !result.pluginReload.started) {
-      showNotification({
-        content: `${result.pluginReload.serviceName} 自动重启失败：${result.pluginReload.message || '未知错误'}，请在 OpenWrt 上手动重启后再刷新页面。`,
-        type: 'alert-warning',
-        timeout: 8000,
-      })
-    }
-
-    if (result.pluginReload?.started) {
-      await sleep(12000)
-    }
 
     await reloadConfigsAPI().catch(() => null)
     const refreshed = await refreshRuntimeRulesAndProxies()
@@ -453,7 +441,7 @@ const confirmApplyToYaml = async () => {
     showNotification({
       content: refreshed
         ? '配置已重新加载，策略组和规则列表已刷新'
-        : '已触发重启，但当前控制器暂未恢复，请稍后手动刷新页面',
+        : '已写入 YAML，但当前控制器暂未刷新成功，请稍后手动刷新页面',
       type: refreshed ? 'alert-success' : 'alert-warning',
       timeout: refreshed ? 3600 : 8000,
     })
