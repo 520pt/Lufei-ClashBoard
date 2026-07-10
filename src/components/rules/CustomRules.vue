@@ -348,7 +348,7 @@ import {
 } from '@/helper/autoImportSettings'
 import { showNotification } from '@/helper/notification'
 import { fetchProxies } from '@/store/proxies'
-import { fetchRules } from '@/store/rules'
+import { fetchRules, ruleProviderList, rules } from '@/store/rules'
 import { iconReflectList } from '@/store/settings'
 import { v4 as uuid } from 'uuid'
 import { computed, onMounted, ref } from 'vue'
@@ -417,6 +417,50 @@ const getRefreshStatusText = (status: CustomRuleRefreshResult) => {
   return ''
 }
 
+const isRuntimeRuleSetType = (type: string) => {
+  return type.toLowerCase().replace(/[-_\s]/g, '') === 'ruleset'
+}
+
+const isCustomRuntimeReady = () => {
+  const providerName = customRules.value?.settings.providerName || ''
+  const directProviderName = customRules.value?.settings.directProviderName || ''
+  const currentPolicyGroup = policyGroup.value
+  const currentDirectPolicyGroup = directPolicyGroup.value
+  const proxyRuleCount =
+    customRules.value?.rules.filter((rule) => rule.policy === 'proxy').length || 0
+  const directRuleCount =
+    customRules.value?.rules.filter((rule) => rule.policy === 'direct').length || 0
+
+  if (!providerName || !directProviderName || !currentPolicyGroup || !currentDirectPolicyGroup) {
+    return false
+  }
+
+  const provider = ruleProviderList.value.find((item) => item.name === providerName)
+  const directProvider = ruleProviderList.value.find((item) => item.name === directProviderName)
+
+  if (!provider || !directProvider) {
+    return false
+  }
+
+  const hasExpectedRuleCounts =
+    provider.ruleCount === proxyRuleCount && directProvider.ruleCount === directRuleCount
+  const hasRules =
+    rules.value.some(
+      (rule) =>
+        isRuntimeRuleSetType(rule.type) &&
+        rule.payload === providerName &&
+        rule.proxy === currentPolicyGroup,
+    ) &&
+    rules.value.some(
+      (rule) =>
+        isRuntimeRuleSetType(rule.type) &&
+        rule.payload === directProviderName &&
+        rule.proxy === currentDirectPolicyGroup,
+    )
+
+  return hasExpectedRuleCounts && hasRules
+}
+
 const refreshRuntimeRulesAndProxies = async () => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const results = await Promise.allSettled([fetchProxies(), fetchRules()])
@@ -429,6 +473,50 @@ const refreshRuntimeRulesAndProxies = async () => {
   }
 
   return false
+}
+
+const waitForCustomRuntimeReady = async (attempts = 18, delay = 2500) => {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await Promise.allSettled([fetchProxies(), fetchRules()])
+
+    if (isCustomRuntimeReady()) {
+      return true
+    }
+
+    await sleep(delay)
+  }
+
+  return false
+}
+
+const restartCoreAndVerifyCustomRules = async () => {
+  let restartError = ''
+
+  try {
+    await restartCoreAPI({ skipErrorNotification: true })
+  } catch (error) {
+    restartError = error instanceof Error ? error.message : String(error)
+  }
+
+  if (await waitForCustomRuntimeReady()) {
+    return true
+  }
+
+  try {
+    await reloadConfigsAPI({ skipErrorNotification: true })
+  } catch (error) {
+    restartError = restartError || (error instanceof Error ? error.message : String(error))
+  }
+
+  if (await waitForCustomRuntimeReady()) {
+    return true
+  }
+
+  throw new Error(
+    `核心重启后仍未检测到自定义规则集，请检查 OpenClash 是否已加载当前 YAML，以及规则地址是否可访问${
+      restartError ? `。底层错误：${restartError}` : ''
+    }`,
+  )
 }
 
 const ensureCustomPolicyGroupIcon = (name: string, icon: string) => {
@@ -462,8 +550,12 @@ const refreshCustomRuleProvider = async (
 
   try {
     await updateRuleProviderAPI(providerName, { skipErrorNotification: true })
-    await fetchRules()
-    return 'updated'
+
+    if (await waitForCustomRuntimeReady(5, 1000)) {
+      return 'updated'
+    }
+
+    throw new Error('规则源刷新接口已返回，但运行时规则数量尚未更新')
   } catch (error) {
     showNotification({
       content: `规则已保存，但${getPolicyLabel(policy)}规则源刷新失败，正在尝试重启核心让规则生效...`,
@@ -472,24 +564,24 @@ const refreshCustomRuleProvider = async (
     })
 
     try {
-      await restartCoreAPI()
-    } catch {
-      await reloadConfigsAPI().catch(() => null)
-    }
-
-    const runtimeRefreshed = await refreshRuntimeRulesAndProxies()
-
-    if (runtimeRefreshed) {
+      await restartCoreAndVerifyCustomRules()
+      await updateRuleProviderAPI(providerName, { skipErrorNotification: true }).catch(() => null)
+      await fetchRules()
       return 'restarted'
+    } catch (restartError) {
+      showNotification({
+        content: `规则已保存，但${getPolicyLabel(policy)}规则源暂未确认生效。请先点击“一键写入当前 YAML”并等待核心重启；如果已经写入，请确认 YAML 里的规则地址是 OpenWrt 可访问的 NAS/局域网 IP。详情：${
+          restartError instanceof Error
+            ? restartError.message
+            : error instanceof Error
+              ? error.message
+              : String(error)
+        }`,
+        type: 'alert-warning',
+        timeout: 10000,
+      })
     }
 
-    showNotification({
-      content: `规则已保存，但${getPolicyLabel(policy)}规则源暂未刷新。请先点击“一键写入当前 YAML”并等待核心重启；如果已经写入，请确认 YAML 里的规则地址是 OpenWrt 可访问的 NAS/局域网 IP。详情：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      type: 'alert-warning',
-      timeout: 9000,
-    })
     return 'failed'
   }
 }
@@ -616,21 +708,13 @@ const confirmApplyToYaml = async () => {
       timeout: 6000,
     })
 
-    let restarted = true
-
-    try {
-      await restartCoreAPI()
-    } catch {
-      restarted = false
-      await reloadConfigsAPI().catch(() => null)
-    }
-
+    await restartCoreAndVerifyCustomRules()
     const refreshed = await refreshRuntimeRulesAndProxies()
 
     showNotification({
       content: refreshed
-        ? `${restarted ? '核心已重启' : '核心重启失败，已尝试重载配置'}，策略组和规则列表已刷新`
-        : '已写入 YAML，但当前控制器暂未刷新成功，请稍后手动刷新页面',
+        ? '核心已重启，并已确认自定义规则集加载成功'
+        : '核心已重启并确认自定义规则集加载成功，但列表刷新暂未完成，请稍后手动刷新页面',
       type: refreshed ? 'alert-success' : 'alert-warning',
       timeout: refreshed ? 4200 : 8000,
     })

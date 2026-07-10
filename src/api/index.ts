@@ -236,8 +236,12 @@ export const flushDNSCacheAPI = () => {
   return axios.post('/cache/dns/flush')
 }
 
-export const reloadConfigsAPI = () => {
-  return axios.put('/configs?reload=true', { path: '', payload: '' })
+export const reloadConfigsAPI = (options: { skipErrorNotification?: boolean } = {}) => {
+  return axios.put(
+    '/configs?reload=true',
+    { path: '', payload: '' },
+    { skipErrorNotification: options.skipErrorNotification },
+  )
 }
 
 export const upgradeUIAPI = () => {
@@ -254,8 +258,10 @@ export const upgradeCoreAPI = (type: 'release' | 'alpha' | 'auto') => {
   return axios.post(url)
 }
 
-export const restartCoreAPI = () => {
-  return axios.post('/restart')
+export const restartCoreAPI = (options: { skipErrorNotification?: boolean } = {}) => {
+  return axios.post('/restart', undefined, {
+    skipErrorNotification: options.skipErrorNotification,
+  })
 }
 
 export const queryDNSAPI = (params: { name: string; type: string }) => {
