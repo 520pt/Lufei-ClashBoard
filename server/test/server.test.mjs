@@ -40,6 +40,7 @@ const {
   readCustomRules,
   readCustomRulesSettings,
   replaceSnapshot,
+  restoreCustomRulesFromBackupForTesting,
   resolveOpenClashConfigPathFromUciForTesting,
   searchRuleProviderCache,
   seedRuleProviderCacheForTesting,
@@ -813,26 +814,37 @@ test('custom rule providers are synced to local rule cache', async () => {
   assert.equal(directSearch.matches[0]?.name, 'LuFei / Custom Direct')
 })
 
-test('custom rule changes create file backups in data directory', async () => {
+test('custom rule changes keep one latest file backup in data directory', async () => {
   replaceSnapshot({})
   const backupDir = path.join(tempDir, 'custom-rule-backups')
-  const countBackups = async () => {
-    try {
-      return (await fs.readdir(backupDir)).filter((name) => name.endsWith('.json')).length
-    } catch {
-      return 0
-    }
-  }
-  const beforeCount = await countBackups()
+  await fs.rm(backupDir, { recursive: true, force: true })
+
   const added = addCustomRule({ target: 'backup-check.example', policy: 'proxy' })
 
   assert.equal(added.added, true)
-  assert.ok((await countBackups()) >= beforeCount + 2)
+  assert.deepEqual(await fs.readdir(backupDir), ['latest.json'])
 
   const deleted = deleteCustomRuleForTesting(added.rule, 'proxy')
 
   assert.equal(deleted.removed, true)
-  assert.ok((await countBackups()) >= beforeCount + 4)
+  assert.deepEqual(await fs.readdir(backupDir), ['latest.json'])
+})
+
+test('custom rules restore from latest backup when storage is empty', async () => {
+  replaceSnapshot({})
+  const backupDir = path.join(tempDir, 'custom-rule-backups')
+  await fs.rm(backupDir, { recursive: true, force: true })
+
+  addCustomRule({ target: 'restore-check.example', policy: 'proxy' })
+  updateCustomRulesSettings({ policyGroup: 'restored-group' })
+
+  replaceSnapshot({})
+
+  assert.deepEqual(readCustomRules('proxy'), [])
+  assert.equal(restoreCustomRulesFromBackupForTesting(), true)
+  assert.deepEqual(readCustomRules('proxy'), ['DOMAIN-SUFFIX,restore-check.example'])
+  assert.equal(readCustomRulesSettings().policyGroup, 'restored-group')
+  assert.deepEqual(await fs.readdir(backupDir), ['latest.json'])
 })
 
 test('proxy group penetration cache expires when provider cache changes', () => {

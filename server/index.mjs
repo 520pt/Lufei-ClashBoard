@@ -40,6 +40,8 @@ const mihomoBinaryPath =
     : path.resolve('.tools/mihomo-bin/mihomo'))
 const ruleSearchTempDir = path.join(dataDir, 'rule-search-temp')
 const customRuleBackupDir = path.join(dataDir, 'custom-rule-backups')
+const customRuleLatestBackupFileName = 'latest.json'
+const customRuleLatestBackupPath = path.join(customRuleBackupDir, customRuleLatestBackupFileName)
 const proxyGroupRulePenetrationCache = new Map()
 const proxyGroupRulePenetrationCacheBySignature = new Map()
 const PROXY_GROUP_RULE_PENETRATION_CACHE_TTL_MS = 10 * 60 * 1000
@@ -520,19 +522,41 @@ const normalizeCustomRulePolicy = (policy) => {
   return policy === CUSTOM_RULE_POLICY_DIRECT ? CUSTOM_RULE_POLICY_DIRECT : CUSTOM_RULE_POLICY_PROXY
 }
 
-const getTimestampFilePart = () => new Date().toISOString().replace(/[-:.TZ]/g, '')
+const cleanupCustomRuleBackups = (keepFileName = customRuleLatestBackupFileName) => {
+  if (!fs.existsSync(customRuleBackupDir)) {
+    return
+  }
+
+  fs.readdirSync(customRuleBackupDir)
+    .filter((name) => name.endsWith('.json') && name !== keepFileName)
+    .forEach((name) => {
+      fs.unlinkSync(path.join(customRuleBackupDir, name))
+    })
+}
+
+const findLatestCustomRuleBackupPath = () => {
+  if (fs.existsSync(customRuleLatestBackupPath)) {
+    return customRuleLatestBackupPath
+  }
+
+  if (!fs.existsSync(customRuleBackupDir)) {
+    return ''
+  }
+
+  const backupFiles = fs
+    .readdirSync(customRuleBackupDir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+
+  return backupFiles.length ? path.join(customRuleBackupDir, backupFiles.at(-1)) : ''
+}
 
 const backupCustomRulesSnapshot = (reason, rules, settings = readCustomRulesSettings()) => {
   try {
     fs.mkdirSync(customRuleBackupDir, { recursive: true })
-    const safeReason = String(reason || 'update').replace(/[^a-z0-9_-]/gi, '-')
-    const filePath = path.join(
-      customRuleBackupDir,
-      `${getTimestampFilePart()}-${safeReason}-${randomBytes(3).toString('hex')}.json`,
-    )
 
     fs.writeFileSync(
-      filePath,
+      customRuleLatestBackupPath,
       `${JSON.stringify(
         {
           reason,
@@ -546,16 +570,9 @@ const backupCustomRulesSnapshot = (reason, rules, settings = readCustomRulesSett
       'utf8',
     )
 
-    const backupFiles = fs
-      .readdirSync(customRuleBackupDir)
-      .filter((name) => name.endsWith('.json'))
-      .sort()
+    cleanupCustomRuleBackups()
 
-    backupFiles.slice(0, Math.max(0, backupFiles.length - 100)).forEach((name) => {
-      fs.unlinkSync(path.join(customRuleBackupDir, name))
-    })
-
-    return filePath
+    return customRuleLatestBackupPath
   } catch (error) {
     console.warn('[custom-rules] failed to backup custom rules', error)
     return ''
@@ -666,7 +683,7 @@ const readCustomRulesSettings = () => {
   }
 }
 
-const updateCustomRulesSettings = (settings = {}) => {
+const updateCustomRulesSettings = (settings = {}, options = {}) => {
   const current = readCustomRulesSettings()
   const next = {
     providerName:
@@ -696,10 +713,54 @@ const updateCustomRulesSettings = (settings = {}) => {
   }
 
   upsertStorageValueStatement.run(CUSTOM_RULES_SETTINGS_KEY, JSON.stringify(next))
-  backupCustomRulesSnapshot('settings', readCustomRuleEntries(), next)
+
+  if (options.backup !== false) {
+    backupCustomRulesSnapshot('settings', readCustomRuleEntries(), next)
+  }
 
   return next
 }
+
+const readCustomRulesBackup = () => {
+  const backupPath = findLatestCustomRuleBackupPath()
+
+  if (!backupPath) {
+    return null
+  }
+
+  try {
+    const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8'))
+
+    if (!backup || typeof backup !== 'object' || !Array.isArray(backup.rules)) {
+      return null
+    }
+
+    return backup
+  } catch (error) {
+    console.warn('[custom-rules] failed to read custom rules backup', error)
+    return null
+  }
+}
+
+const restoreCustomRulesFromBackupIfEmpty = () => {
+  if (readCustomRuleEntries().length > 0) {
+    return false
+  }
+
+  const backup = readCustomRulesBackup()
+
+  if (!backup || backup.rules.length === 0) {
+    return false
+  }
+
+  const restoredRules = writeCustomRuleEntries(backup.rules)
+  const restoredSettings = updateCustomRulesSettings(backup.settings, { backup: false })
+  backupCustomRulesSnapshot('restore', restoredRules, restoredSettings)
+
+  return true
+}
+
+restoreCustomRulesFromBackupIfEmpty()
 
 const buildCustomRuleSnippets = (ruleUrl, directRuleUrl) => {
   const settings = readCustomRulesSettings()
@@ -6047,6 +6108,7 @@ export {
   readSnapshot,
   replaceSnapshot,
   resolveOpenClashConfigPathFromUci as resolveOpenClashConfigPathFromUciForTesting,
+  restoreCustomRulesFromBackupIfEmpty as restoreCustomRulesFromBackupForTesting,
   searchRuleProviderCache,
   seedRuleProviderCacheForTesting,
   server,

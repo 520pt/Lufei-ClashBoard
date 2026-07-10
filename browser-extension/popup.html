@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>LuFei 自定义规则</title>
+    <link
+      rel="stylesheet"
+      href="styles.css"
+    />
+  </head>
+  <body>
+    <main class="card popup">
+      <header class="header">
+        <div class="logo">
+          <img
+            src="icons/icon-192.png"
+            alt=""
+          />
+        </div>
+        <div>
+          <h1 class="title">LuFei 自定义规则</h1>
+          <p class="subtitle">把当前网站一键加入代理或直连</p>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="target-box">
+          <div class="label">当前识别</div>
+          <div
+            id="target"
+            class="target-line"
+          >
+            正在读取当前标签页...
+          </div>
+          <div
+            id="server"
+            class="hint"
+          ></div>
+        </div>
+
+        <div class="field">
+          <span class="label">添加到哪个策略</span>
+          <div
+            class="segmented"
+            role="tablist"
+          >
+            <button
+              id="policy-proxy"
+              type="button"
+              data-policy="proxy"
+            >
+              代理
+            </button>
+            <button
+              id="policy-direct"
+              type="button"
+              data-policy="direct"
+            >
+              直连
+            </button>
+          </div>
+        </div>
+
+        <div class="field grid">
+          <label>
+            <span class="label">规则类型</span>
+            <select
+              id="kind"
+              class="select"
+            >
+              <option value="domain_suffix">DOMAIN-SUFFIX</option>
+              <option value="domain">DOMAIN</option>
+              <option value="auto">自动</option>
+              <option value="ip_cidr">IP-CIDR</option>
+            </select>
+          </label>
+          <label>
+            <span class="label">手动目标</span>
+            <input
+              id="manual-target"
+              class="input"
+              placeholder="可留空，用当前网站"
+            />
+          </label>
+        </div>
+
+        <button
+          id="add"
+          type="button"
+          class="button button-primary"
+        >
+          添加当前网站
+        </button>
+
+        <div class="actions">
+          <button
+            id="open-panel"
+            type="button"
+            class="button button-ghost"
+          >
+            打开面板
+          </button>
+          <button
+            id="options"
+            type="button"
+            class="button button-ghost"
+          >
+            设置
+          </button>
+        </div>
+
+        <div
+          id="status"
+          class="status"
+        ></div>
+      </section>
+
+      <footer class="footer">右键网页也可以快速加入自定义代理/直连。</footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
