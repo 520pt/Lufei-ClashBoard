@@ -38,7 +38,7 @@
             <div class="flex items-center justify-between gap-2">
               <div class="text-sm font-semibold">规则地址</div>
               <button
-                class="btn btn-xs"
+                class="btn btn-primary btn-xs"
                 type="button"
                 @click="copyText(customRules?.ruleUrl || '')"
               >
@@ -89,7 +89,7 @@
               />
             </label>
             <button
-              class="btn btn-sm self-end"
+              class="btn btn-primary btn-sm self-end"
               type="submit"
               :disabled="submitting"
             >
@@ -129,7 +129,7 @@
             <div class="flex items-center justify-between gap-2">
               <div class="font-semibold">{{ snippet.title }}</div>
               <button
-                class="btn btn-xs"
+                class="btn btn-primary btn-xs"
                 type="button"
                 @click="copyText(snippet.value)"
               >
