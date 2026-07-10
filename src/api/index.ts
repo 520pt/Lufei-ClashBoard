@@ -504,6 +504,7 @@ export type ApplyCustomRuleYamlResult = {
   backupPath: string
   changed: boolean
   addedProvider: boolean
+  updatedProvider?: boolean
   addedRule: boolean
   addedProxyGroup: boolean
   policyGroup?: string

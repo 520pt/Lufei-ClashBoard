@@ -294,14 +294,16 @@
       <div class="flex flex-col gap-4 text-sm">
         <div>
           将通过后端配置里的规则源 SSH 连接 OpenWrt，自动检测当前正在使用的
-          YAML，并写入自定义规则集。
+          YAML，并写入代理和直连两套自定义规则集。
         </div>
         <div class="bg-base-200 rounded-box flex flex-col gap-2 p-3">
-          <div class="text-base-content/70 text-xs">规则地址</div>
+          <div class="text-base-content/70 text-xs">代理规则地址</div>
           <code class="text-xs break-all">{{ customRules?.ruleUrl || '-' }}</code>
+          <div class="text-base-content/70 mt-2 text-xs">直连规则地址</div>
+          <code class="text-xs break-all">{{ customRules?.directRuleUrl || '-' }}</code>
         </div>
         <div class="text-base-content/60 text-xs">
-          写入前会在 OpenWrt 上自动备份原 YAML；如果已经存在相同配置，不会重复添加。
+          写入前会在 OpenWrt 上自动备份原 YAML；如果已存在旧配置，会自动补齐或更新为双策略。
         </div>
         <div class="flex justify-end gap-2">
           <button

@@ -782,6 +782,55 @@ const insertLineIntoYamlSection = (lines, sectionName, line) => {
   return true
 }
 
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const getIndentLength = (line) => String(line || '').match(/^\s*/)?.[0]?.length || 0
+
+const upsertYamlMappingEntryInSection = (lines, sectionName, key, line) => {
+  const range = findTopLevelYamlSectionRange(lines, sectionName)
+
+  if (!range) {
+    return null
+  }
+
+  const escapedKey = escapeRegExp(key)
+  const escapedDoubleQuotedKey = escapeRegExp(escapeYamlDoubleQuotedValue(key))
+  const escapedSingleQuotedKey = escapeRegExp(String(key).replace(/'/g, "''"))
+  const keyPattern = new RegExp(
+    `^\\s*(?:${escapedKey}|"${escapedDoubleQuotedKey}"|'${escapedSingleQuotedKey}')\\s*:`,
+  )
+  const index = lines.findIndex((candidate, candidateIndex) => {
+    return candidateIndex > range.start && candidateIndex < range.end && keyPattern.test(candidate)
+  })
+
+  if (index === -1) {
+    lines.splice(range.start + 1, 0, line)
+    return { found: false, changed: true }
+  }
+
+  const indentLength = getIndentLength(lines[index])
+  let end = index + 1
+
+  while (end < range.end) {
+    const candidate = String(lines[end] || '')
+
+    if (candidate.trim() && getIndentLength(candidate) <= indentLength) {
+      break
+    }
+
+    end += 1
+  }
+
+  const currentEntry = lines.slice(index, end)
+  const changed = currentEntry.length !== 1 || currentEntry[0] !== line
+
+  if (changed) {
+    lines.splice(index, end - index, line)
+  }
+
+  return { found: true, changed }
+}
+
 const getYamlProxyGroupNameFromEntry = (entryLines) => {
   const firstLine = entryLines[0] || ''
   const inlineMatch = firstLine.match(/^\s*-\s*\{\s*name:\s*([^,}]+)\s*(?:[,}]|$)/)
@@ -891,10 +940,6 @@ const yamlLinesIncludeCustomRule = (lines, providerName, policyGroup) => {
   return lines.some((line) => String(line || '').trim() === rule)
 }
 
-const parsedYamlIncludesCustomProvider = (parsed, providerName) => {
-  return Boolean(parsed?.['rule-providers']?.[providerName])
-}
-
 const parsedYamlIncludesProxyProvider = (parsed, providerName) => {
   return Boolean(parsed?.['proxy-providers']?.[providerName])
 }
@@ -977,6 +1022,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     content: String(content || ''),
     changed: false,
     addedProvider: false,
+    updatedProvider: false,
     addedRule: false,
     addedProxyGroup: false,
     removedDuplicateProxyGroups: 0,
@@ -1062,34 +1108,43 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.addedRule = true
   }
 
-  if (!parsedYamlIncludesCustomProvider(parsed, providerName)) {
-    if (
-      !insertLineIntoYamlSection(
-        lines,
-        'rule-providers',
-        `  ${providerName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(ruleUrl)}"}`,
-      )
-    ) {
-      throw new Error('rule-providers section was not found in the active YAML.')
-    }
-    result.addedProvider = true
+  const providerUpsertResult = upsertYamlMappingEntryInSection(
+    lines,
+    'rule-providers',
+    providerName,
+    `  ${providerName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(ruleUrl)}"}`,
+  )
+
+  if (!providerUpsertResult) {
+    throw new Error('rule-providers section was not found in the active YAML.')
   }
 
-  if (!parsedYamlIncludesCustomProvider(parsed, directProviderName)) {
-    if (
-      !insertLineIntoYamlSection(
-        lines,
-        'rule-providers',
-        `  ${directProviderName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(directRuleUrl)}"}`,
-      )
-    ) {
-      throw new Error('rule-providers section was not found in the active YAML.')
-    }
+  if (!providerUpsertResult.found) {
     result.addedProvider = true
+  } else if (providerUpsertResult.changed) {
+    result.updatedProvider = true
+  }
+
+  const directProviderUpsertResult = upsertYamlMappingEntryInSection(
+    lines,
+    'rule-providers',
+    directProviderName,
+    `  ${directProviderName}: {<<: *class, url: "${escapeYamlDoubleQuotedValue(directRuleUrl)}"}`,
+  )
+
+  if (!directProviderUpsertResult) {
+    throw new Error('rule-providers section was not found in the active YAML.')
+  }
+
+  if (!directProviderUpsertResult.found) {
+    result.addedProvider = true
+  } else if (directProviderUpsertResult.changed) {
+    result.updatedProvider = true
   }
 
   result.changed =
     result.addedProvider ||
+    result.updatedProvider ||
     result.addedRule ||
     result.addedProxyGroup ||
     result.removedConflictingProxyGroups > 0 ||
@@ -2080,6 +2135,7 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       backupPath,
       changed: applyResult.changed,
       addedProvider: applyResult.addedProvider,
+      updatedProvider: applyResult.updatedProvider,
       addedRule: applyResult.addedRule,
       addedProxyGroup: applyResult.addedProxyGroup,
     }

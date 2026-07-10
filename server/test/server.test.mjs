@@ -388,6 +388,66 @@ rule-providers:
   assert.equal(second.content, first.content)
 })
 
+test('custom rule YAML apply updates old single custom provider to proxy and direct providers', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: 自定义-代理, <<: *default}
+
+rules:
+  - RULE-SET,LuFei / Custom,自定义-代理
+  - MATCH,DIRECT
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  LuFei / Custom: {<<: *class, url: "http://old-host:2048/ziyong.list"}
+`
+
+  const first = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.equal(first.changed, true)
+  assert.equal(first.addedProvider, true)
+  assert.equal(first.updatedProvider, true)
+  assert.equal(first.addedRule, true)
+  assert.equal(first.addedProxyGroup, true)
+  assert.doesNotMatch(first.content, /old-host/)
+  assert.match(
+    first.content,
+    /  LuFei \/ Custom: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"\}/,
+  )
+  assert.match(
+    first.content,
+    /  LuFei \/ Custom Direct: \{<<: \*class, url: "http:\/\/10\.0\.0\.10:2048\/ziyong-direct\.list"\}/,
+  )
+  assert.match(first.content, /  - RULE-SET,LuFei \/ Custom,自定义-代理/)
+  assert.match(first.content, /  - RULE-SET,LuFei \/ Custom Direct,自定义-直连/)
+  assert.match(first.content, /  - \{name: 自定义-直连, type: select, proxies: \[DIRECT\]\}/)
+
+  const second = applyCustomRuleProviderToYamlContentForTesting(first.content, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.equal(second.changed, false)
+  assert.equal(second.content, first.content)
+})
+
 test('custom rule YAML apply removes duplicate custom proxy groups', () => {
   const source = `default: &default
   type: select
