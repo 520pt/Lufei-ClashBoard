@@ -495,6 +495,8 @@ export type ApplyCustomRuleYamlResult = {
   addedProvider: boolean
   addedRule: boolean
   addedProxyGroup: boolean
+  policyGroup?: string
+  removedConflictingProxyGroups?: number
   removedDuplicateProxyGroups?: number
 }
 

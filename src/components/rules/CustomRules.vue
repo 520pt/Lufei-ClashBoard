@@ -64,7 +64,7 @@
             <input
               v-model.trim="policyGroup"
               class="input input-bordered input-sm"
-              placeholder="路飞 或 lufei"
+              placeholder="自定义 或 zidingyi"
               required
             />
           </label>
@@ -76,7 +76,7 @@
             保存名称
           </button>
           <div class="text-base-content/60 text-xs md:col-span-2">
-            能显示中文就用中文，默认“路飞”；如果 OpenClash 中中文显示异常，就改成拼音。
+            能显示中文就用中文，默认“自定义”；如果 OpenClash 中中文显示异常，就改成拼音。
           </div>
         </form>
       </div>
@@ -292,7 +292,7 @@ import { computed, onMounted, ref } from 'vue'
 const customRules = ref<CustomRulesPayload | null>(null)
 const target = ref('')
 const kind = ref('auto')
-const policyGroup = ref('路飞')
+const policyGroup = ref('自定义')
 const loading = ref(false)
 const submitting = ref(false)
 const errorMessage = ref('')

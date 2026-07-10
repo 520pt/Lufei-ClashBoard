@@ -408,12 +408,50 @@ rule-providers:
   assert.equal((result.content.match(/name:\s*路飞/g) || []).length, 1)
 })
 
+test('custom rule YAML apply avoids proxy provider name conflict', () => {
+  const source = `proxy-providers:
+  路飞:
+    type: http
+    url: "https://example.test/proxies.yaml"
+
+default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: 路飞, <<: *default}
+  - {name: AI, <<: *default}
+
+rules:
+  - RULE-SET,LuFei / Custom,路飞
+  - MATCH,DIRECT
+
+rule-providers:
+  LuFei / Custom: {type: http, url: "http://10.0.0.10:2048/ziyong.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    policyGroup: '路飞',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+  })
+
+  assert.equal(result.changed, true)
+  assert.equal(result.policyGroup, '自定义')
+  assert.equal(result.removedConflictingProxyGroups, 1)
+  assert.doesNotMatch(result.content, /\{name: 路飞, <<: \*default\}/)
+  assert.match(result.content, /\{name: 自定义, <<: \*default\}/)
+  assert.match(result.content, /RULE-SET,LuFei \/ Custom,自定义/)
+  assert.doesNotMatch(result.content, /RULE-SET,LuFei \/ Custom,路飞/)
+})
+
 test('custom rules manager generates rules and snippets', () => {
   replaceSnapshot({})
 
   assert.deepEqual(readCustomRulesSettings(), {
     providerName: 'LuFei / Custom',
-    policyGroup: '路飞',
+    policyGroup: '自定义',
     fileName: 'ziyong.list',
   })
 

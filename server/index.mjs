@@ -56,7 +56,7 @@ const RULE_SOURCE_SSH_REQUIRED_CODE = 'RULE_SOURCE_SSH_REQUIRED'
 const CUSTOM_RULES_KEY = 'custom-rules/list'
 const CUSTOM_RULES_SETTINGS_KEY = 'custom-rules/settings'
 const DEFAULT_CUSTOM_RULE_PROVIDER_NAME = 'LuFei / Custom'
-const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '路飞'
+const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '自定义'
 const DEFAULT_CUSTOM_RULE_FILE_NAME = 'ziyong.list'
 const accessSessionSecret = randomBytes(32).toString('hex')
 const configuredRuleProviderAutoRefreshCheckMs = Number.parseInt(
@@ -743,6 +743,46 @@ const removeDuplicateProxyGroupsByName = (lines, policyGroup) => {
   return duplicatedEntries.length
 }
 
+const removeProxyGroupsByName = (lines, policyGroup) => {
+  const range = findTopLevelYamlSectionRange(lines, 'proxy-groups')
+
+  if (!range) {
+    return 0
+  }
+
+  const entries = []
+
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    if (/^\s*-\s*/.test(lines[index])) {
+      const start = index
+      let end = range.end
+
+      for (let nextIndex = index + 1; nextIndex < range.end; nextIndex += 1) {
+        if (/^\s*-\s*/.test(lines[nextIndex])) {
+          end = nextIndex
+          break
+        }
+      }
+
+      entries.push({
+        start,
+        end,
+        name: getYamlProxyGroupNameFromEntry(lines.slice(start, end)),
+      })
+    }
+  }
+
+  const matchedEntries = entries
+    .filter((entry) => entry.name === policyGroup)
+    .sort((prev, next) => next.start - prev.start)
+
+  matchedEntries.forEach((entry) => {
+    lines.splice(entry.start, entry.end - entry.start)
+  })
+
+  return matchedEntries.length
+}
+
 const parsedYamlIncludesCustomRule = (parsed, providerName, policyGroup) => {
   const rule = `RULE-SET,${providerName},${policyGroup}`
 
@@ -752,8 +792,18 @@ const parsedYamlIncludesCustomRule = (parsed, providerName, policyGroup) => {
   )
 }
 
+const yamlLinesIncludeCustomRule = (lines, providerName, policyGroup) => {
+  const rule = `- RULE-SET,${providerName},${policyGroup}`
+
+  return lines.some((line) => String(line || '').trim() === rule)
+}
+
 const parsedYamlIncludesCustomProvider = (parsed, providerName) => {
   return Boolean(parsed?.['rule-providers']?.[providerName])
+}
+
+const parsedYamlIncludesProxyProvider = (parsed, providerName) => {
+  return Boolean(parsed?.['proxy-providers']?.[providerName])
 }
 
 const parsedYamlIncludesCustomProxyGroup = (parsed, policyGroup) => {
@@ -763,12 +813,24 @@ const parsedYamlIncludesCustomProxyGroup = (parsed, policyGroup) => {
   )
 }
 
+const resolveCustomPolicyGroupName = (parsed, requestedPolicyGroup) => {
+  if (!parsedYamlIncludesProxyProvider(parsed, requestedPolicyGroup)) {
+    return requestedPolicyGroup
+  }
+
+  if (!parsedYamlIncludesProxyProvider(parsed, DEFAULT_CUSTOM_RULE_POLICY_GROUP)) {
+    return DEFAULT_CUSTOM_RULE_POLICY_GROUP
+  }
+
+  return `${requestedPolicyGroup}策略`
+}
+
 const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
   const providerName = normalizeYamlInlineValue(
     options.providerName,
     DEFAULT_CUSTOM_RULE_PROVIDER_NAME,
   )
-  const policyGroup = normalizeYamlInlineValue(
+  const requestedPolicyGroup = normalizeYamlInlineValue(
     options.policyGroup,
     DEFAULT_CUSTOM_RULE_POLICY_GROUP,
   )
@@ -779,6 +841,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
   }
 
   const parsed = parseYaml(content) || {}
+  const policyGroup = resolveCustomPolicyGroupName(parsed, requestedPolicyGroup)
   const lines = String(content || '')
     .replace(/\r\n/g, '\n')
     .split('\n')
@@ -789,6 +852,25 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     addedRule: false,
     addedProxyGroup: false,
     removedDuplicateProxyGroups: 0,
+    removedConflictingProxyGroups: 0,
+    policyGroup,
+  }
+
+  if (policyGroup !== requestedPolicyGroup) {
+    result.removedConflictingProxyGroups = removeProxyGroupsByName(lines, requestedPolicyGroup)
+    if (result.removedConflictingProxyGroups > 0) {
+      result.changed = true
+    }
+
+    const oldRule = `RULE-SET,${providerName},${requestedPolicyGroup}`
+    const newRule = `RULE-SET,${providerName},${policyGroup}`
+
+    lines.forEach((line, index) => {
+      if (String(line || '').trim() === `- ${oldRule}`) {
+        lines[index] = line.replace(oldRule, newRule)
+        result.changed = true
+      }
+    })
   }
 
   result.removedDuplicateProxyGroups = removeDuplicateProxyGroupsByName(lines, policyGroup)
@@ -802,7 +884,10 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.addedProxyGroup = true
   }
 
-  if (!parsedYamlIncludesCustomRule(parsed, providerName, policyGroup)) {
+  if (
+    !parsedYamlIncludesCustomRule(parsed, providerName, policyGroup) &&
+    !yamlLinesIncludeCustomRule(lines, providerName, policyGroup)
+  ) {
     if (!insertLineIntoYamlSection(lines, 'rules', `  - RULE-SET,${providerName},${policyGroup}`)) {
       throw new Error('rules section was not found in the active YAML.')
     }
@@ -826,6 +911,7 @@ const applyCustomRuleProviderToYamlContent = (content, options = {}) => {
     result.addedProvider ||
     result.addedRule ||
     result.addedProxyGroup ||
+    result.removedConflictingProxyGroups > 0 ||
     result.removedDuplicateProxyGroups > 0
   result.content = lines.join('\n')
 
