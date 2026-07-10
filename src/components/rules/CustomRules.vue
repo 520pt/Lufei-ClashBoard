@@ -8,9 +8,7 @@
               <div class="text-xl font-semibold">自定义规则集</div>
               <div class="badge badge-primary badge-sm">ziyong.list</div>
               <div class="badge badge-success badge-sm">ziyong-direct.list</div>
-              <div class="badge badge-ghost badge-sm">
-                {{ customRules?.rules.length || 0 }} 条规则
-              </div>
+              <div class="badge badge-ghost badge-sm">{{ totalEffectiveRuleCount }} 条有效规则</div>
             </div>
             <div class="text-base-content/70 mt-1 text-sm">
               在这里维护自己的域名、网址和 IP，保存后会立即更新到规则集地址。
@@ -211,80 +209,74 @@
         <div>
           <div class="font-semibold">当前自定义规则</div>
           <div class="text-base-content/60 text-xs">
-            共 {{ customRules?.rules.length || 0 }} 条，删除前会再次确认。
+            代理 {{ proxyRuleCount }} 条，直连 {{ directRuleCount }} 条；可以用 <code># PT</code>
+            这类注释做分组标记。
           </div>
         </div>
       </div>
 
-      <div
-        v-if="!customRules?.rules.length"
-        class="text-base-content/60 rounded-box border-base-300 border border-dashed p-4 text-sm"
-      >
-        暂无自定义规则。可以先添加 <code>example.com</code> 或 <code>1.2.3.4</code> 测试。
-      </div>
-
-      <div
-        v-else
-        class="flex flex-col gap-2"
-      >
-        <div
-          v-for="entry in customRules.rules"
-          :key="`${entry.policy}:${entry.rule}`"
-          class="bg-base-200 rounded-box flex items-center justify-between gap-3 p-3"
-        >
-          <div class="flex min-w-0 flex-1 items-center gap-2">
-            <div
-              class="badge badge-sm shrink-0"
-              :class="entry.policy === 'direct' ? 'badge-success' : 'badge-primary'"
-            >
-              {{ getPolicyLabel(entry.policy) }}
+      <div class="grid gap-3 xl:grid-cols-2">
+        <div class="bg-base-200 rounded-box border-base-300 min-w-0 border">
+          <div class="border-base-300 flex items-center justify-between gap-3 border-b px-3 py-2">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-primary badge-sm">代理</span>
+                <span class="font-semibold">ziyong.list</span>
+              </div>
+              <div class="text-base-content/60 mt-1 text-xs">
+                {{ proxyRuleCount }} 条有效规则，注释行会原样保留。
+              </div>
             </div>
-            <code class="min-w-0 text-xs break-all">{{ entry.rule }}</code>
+            <button
+              class="btn btn-primary btn-sm shrink-0"
+              type="button"
+              :disabled="submitting"
+              @click="handleSaveRulesText('proxy')"
+            >
+              保存
+            </button>
           </div>
-          <button
-            class="btn btn-error btn-xs shrink-0"
-            type="button"
-            :disabled="submitting"
-            @click="askDeleteRule(entry)"
-          >
-            删除
-          </button>
+          <textarea
+            v-model="proxyRulesText"
+            class="textarea custom-rule-editor bg-base-100 min-h-[28rem] w-full resize-y rounded-t-none border-0 font-mono text-xs leading-6 focus:outline-none"
+            spellcheck="false"
+            placeholder="# PT
+DOMAIN-KEYWORD,m-team
+DOMAIN-SUFFIX,cnboy.org"
+          />
+        </div>
+
+        <div class="bg-base-200 rounded-box border-base-300 min-w-0 border">
+          <div class="border-base-300 flex items-center justify-between gap-3 border-b px-3 py-2">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-success badge-sm">直连</span>
+                <span class="font-semibold">ziyong-direct.list</span>
+              </div>
+              <div class="text-base-content/60 mt-1 text-xs">
+                {{ directRuleCount }} 条有效规则，适合放国内站点或需要直连的 IP。
+              </div>
+            </div>
+            <button
+              class="btn btn-success btn-sm shrink-0"
+              type="button"
+              :disabled="submitting"
+              @click="handleSaveRulesText('direct')"
+            >
+              保存
+            </button>
+          </div>
+          <textarea
+            v-model="directRulesText"
+            class="textarea custom-rule-editor bg-base-100 min-h-[28rem] w-full resize-y rounded-t-none border-0 font-mono text-xs leading-6 focus:outline-none"
+            spellcheck="false"
+            placeholder="# 国内直连
+DOMAIN-SUFFIX,example.cn
+IP-CIDR,10.0.0.0/8,no-resolve"
+          />
         </div>
       </div>
     </div>
-
-    <DialogWrapper
-      v-model="deleteDialogVisible"
-      title="确认删除规则"
-      box-class="max-w-lg"
-    >
-      <div class="flex flex-col gap-4 text-sm">
-        <div>确定要删除这条自定义规则吗？</div>
-        <div class="bg-base-200 rounded-box flex flex-col gap-2 p-3">
-          <div class="badge badge-sm w-fit">
-            {{ pendingDeleteEntry ? getPolicyLabel(pendingDeleteEntry.policy) : '-' }}
-          </div>
-          <code class="text-xs break-all">{{ pendingDeleteEntry?.rule || '-' }}</code>
-        </div>
-        <div class="flex justify-end gap-2">
-          <button
-            class="btn btn-sm"
-            type="button"
-            @click="deleteDialogVisible = false"
-          >
-            取消
-          </button>
-          <button
-            class="btn btn-error btn-sm"
-            type="button"
-            :disabled="submitting"
-            @click="confirmDeleteRule"
-          >
-            删除
-          </button>
-        </div>
-      </div>
-    </DialogWrapper>
 
     <DialogWrapper
       v-model="applyDialogVisible"
@@ -331,13 +323,12 @@
 import {
   addCustomRuleAPI,
   applyCustomRuleToActiveYamlAPI,
-  deleteCustomRuleAPI,
   fetchCustomRulesAPI,
   reloadConfigsAPI,
   restartCoreAPI,
   updateCustomRulesSettingsAPI,
+  updateCustomRulesTextAPI,
   updateRuleProviderAPI,
-  type CustomRuleEntry,
   type CustomRulePolicy,
   type CustomRulesPayload,
 } from '@/api'
@@ -362,9 +353,41 @@ const directPolicyGroup = ref('自定义-直连')
 const loading = ref(false)
 const submitting = ref(false)
 const errorMessage = ref('')
-const deleteDialogVisible = ref(false)
 const applyDialogVisible = ref(false)
-const pendingDeleteEntry = ref<CustomRuleEntry | null>(null)
+const proxyRulesText = ref('')
+const directRulesText = ref('')
+
+const isCustomRuleComment = (value: string) => value.trim().startsWith('#')
+
+const getRulesText = (policy: CustomRulePolicy) => {
+  return (
+    customRules.value?.rules
+      .filter((entry) => entry.policy === policy)
+      .map((entry) => entry.rule)
+      .join('\n') || ''
+  )
+}
+
+const countEffectiveRules = (text: string) => {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isCustomRuleComment(line)).length
+}
+
+const countEffectiveRuleEntries = (policy: CustomRulePolicy) => {
+  return (
+    customRules.value?.rules.filter(
+      (entry) => entry.policy === policy && !isCustomRuleComment(entry.rule),
+    ).length || 0
+  )
+}
+
+const proxyRuleCount = computed(() => countEffectiveRules(proxyRulesText.value))
+const directRuleCount = computed(() => countEffectiveRules(directRulesText.value))
+const totalEffectiveRuleCount = computed(
+  () => countEffectiveRuleEntries('proxy') + countEffectiveRuleEntries('direct'),
+)
 
 const snippets = computed(() => [
   {
@@ -389,6 +412,8 @@ const loadCustomRules = async () => {
     customRules.value = await fetchCustomRulesAPI()
     policyGroup.value = customRules.value.settings.policyGroup
     directPolicyGroup.value = customRules.value.settings.directPolicyGroup
+    proxyRulesText.value = getRulesText('proxy')
+    directRulesText.value = getRulesText('direct')
     ensureCustomPolicyGroupIcon(policyGroup.value, CUSTOM_PROXY_GROUP_ICON)
     ensureCustomPolicyGroupIcon(directPolicyGroup.value, CUSTOM_DIRECT_PROXY_GROUP_ICON)
   } catch (error) {
@@ -426,10 +451,8 @@ const isCustomRuntimeReady = (requireRuleCounts = true) => {
   const directProviderName = customRules.value?.settings.directProviderName || ''
   const currentPolicyGroup = policyGroup.value
   const currentDirectPolicyGroup = directPolicyGroup.value
-  const proxyRuleCount =
-    customRules.value?.rules.filter((rule) => rule.policy === 'proxy').length || 0
-  const directRuleCount =
-    customRules.value?.rules.filter((rule) => rule.policy === 'direct').length || 0
+  const proxyRuleCount = countEffectiveRuleEntries('proxy')
+  const directRuleCount = countEffectiveRuleEntries('direct')
 
   if (!providerName || !directProviderName || !currentPolicyGroup || !currentDirectPolicyGroup) {
     return false
@@ -646,29 +669,19 @@ const handleAddRule = async () => {
   }
 }
 
-const askDeleteRule = (entry: CustomRuleEntry) => {
-  pendingDeleteEntry.value = entry
-  deleteDialogVisible.value = true
-}
-
-const confirmDeleteRule = async () => {
-  if (!pendingDeleteEntry.value) return
-
+const handleSaveRulesText = async (policy: CustomRulePolicy) => {
   submitting.value = true
 
   try {
-    const entry = pendingDeleteEntry.value
-    await deleteCustomRuleAPI(entry.rule, entry.policy)
-    deleteDialogVisible.value = false
-    pendingDeleteEntry.value = null
+    const text = policy === 'direct' ? directRulesText.value : proxyRulesText.value
+    const result = await updateCustomRulesTextAPI(policy, text)
     await loadCustomRules()
-    const refreshStatus = await refreshCustomRuleProvider(entry.policy)
+    const refreshStatus = await refreshCustomRuleProvider(policy)
+
     showNotification({
-      content: `已删除${getPolicyLabel(entry.policy)}规则：${entry.rule}${getRefreshStatusText(
-        refreshStatus,
-      )}`,
+      content: `已保存${getPolicyLabel(policy)}规则：${result.updatedCount} 条有效规则，${result.commentCount} 条分组注释${getRefreshStatusText(refreshStatus)}`,
       type: 'alert-success',
-      timeout: refreshStatus === 'failed' ? 3200 : 2400,
+      timeout: refreshStatus === 'failed' ? 3600 : 2400,
     })
   } catch (error) {
     showNotification({
@@ -763,3 +776,10 @@ const confirmApplyToYaml = async () => {
 
 onMounted(loadCustomRules)
 </script>
+
+<style scoped>
+.custom-rule-editor {
+  tab-size: 2;
+  white-space: pre;
+}
+</style>

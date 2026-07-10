@@ -614,6 +614,33 @@ export const deleteCustomRuleAPI = async (rule: string, policy: CustomRulePolicy
   return data as { removed: boolean; rules: CustomRuleEntry[] }
 }
 
+export const updateCustomRulesTextAPI = async (
+  policy: CustomRulePolicy = 'proxy',
+  text: string,
+) => {
+  const response = await fetchServerApi('/api/custom-rules', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ policy, text }),
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data?.message || `Failed to update custom rules: ${response.status}`)
+  }
+
+  return data as {
+    policy: CustomRulePolicy
+    rules: CustomRuleEntry[]
+    updatedCount: number
+    commentCount: number
+  }
+}
+
 export const updateCustomRulesSettingsAPI = async (settings: Partial<CustomRulesSettings>) => {
   const response = await fetchServerApi('/api/custom-rules/settings', {
     method: 'POST',

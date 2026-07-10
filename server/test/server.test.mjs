@@ -45,6 +45,7 @@ const {
   readSnapshot,
   replaceManagedSnapshotForTesting,
   replaceSnapshot,
+  replaceCustomRulesTextForTesting,
   restoreCustomRulesFromBackupForTesting,
   resolveOpenClashConfigPathFromUciForTesting,
   searchRuleProviderCache,
@@ -827,6 +828,34 @@ bookmarkearth.com
   )
   assert.match(readCustomRuleListText('proxy'), /DOMAIN-KEYWORD,m-team/)
   assert.match(readCustomRuleListText('proxy'), /DOMAIN-SUFFIX,bookmarkearth\.com/)
+})
+
+test('custom rules text editor preserves comments and normalizes plain domains', () => {
+  replaceSnapshot({})
+
+  const result = replaceCustomRulesTextForTesting({
+    policy: 'proxy',
+    text: `# PT
+DOMAIN-KEYWORD,m-team
+cnboy.org
+
+# DNS
+IP-CIDR,8.8.8.8/32,no-resolve`,
+  })
+
+  assert.equal(result.updatedCount, 3)
+  assert.equal(result.commentCount, 2)
+  assert.deepEqual(readCustomRules('proxy'), [
+    '# PT',
+    'DOMAIN-KEYWORD,m-team',
+    'DOMAIN-SUFFIX,cnboy.org',
+    '# DNS',
+    'IP-CIDR,8.8.8.8/32,no-resolve',
+  ])
+  assert.equal(
+    readCustomRuleListText('proxy'),
+    '# PT\nDOMAIN-KEYWORD,m-team\nDOMAIN-SUFFIX,cnboy.org\n# DNS\nIP-CIDR,8.8.8.8/32,no-resolve\n',
+  )
 })
 
 test('custom rules manager keeps pasted clash rules as separate entries', () => {

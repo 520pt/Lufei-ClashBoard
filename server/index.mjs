@@ -524,6 +524,30 @@ const makeCustomRule = (target, kind = 'auto') => {
   throw new Error(`不支持的规则类型: ${kind}`)
 }
 
+const isCustomRuleComment = (value) => String(value || '').trim().startsWith('#')
+
+const customRuleTextToEntries = (text, policy = CUSTOM_RULE_POLICY_PROXY) => {
+  const normalizedPolicy = normalizeCustomRulePolicy(policy)
+
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      if (isCustomRuleComment(line) || isCompleteCustomRuleLine(line)) {
+        return {
+          rule: line,
+          policy: normalizedPolicy,
+        }
+      }
+
+      return {
+        rule: makeCustomRule(line, 'auto'),
+        policy: normalizedPolicy,
+      }
+    })
+}
+
 const normalizeCustomRulePolicy = (policy) => {
   return policy === CUSTOM_RULE_POLICY_DIRECT ? CUSTOM_RULE_POLICY_DIRECT : CUSTOM_RULE_POLICY_PROXY
 }
@@ -640,7 +664,9 @@ const readCustomRuleEntries = () => {
       item && typeof item === 'object'
         ? normalizeCustomRulePolicy(item.policy)
         : CUSTOM_RULE_POLICY_PROXY
-    const key = `${policy}\n${rule}`
+    const key = isCustomRuleComment(rule)
+      ? `${policy}\n${rule}\n${entries.length}`
+      : `${policy}\n${rule}`
 
     if (seen.has(key)) return
 
@@ -660,7 +686,9 @@ const writeCustomRuleEntries = (entries) => {
     if (!rule) return
 
     const policy = normalizeCustomRulePolicy(entry?.policy)
-    const key = `${policy}\n${rule}`
+    const key = isCustomRuleComment(rule)
+      ? `${policy}\n${rule}\n${uniqueEntries.length}`
+      : `${policy}\n${rule}`
 
     if (seen.has(key)) return
 
@@ -1792,6 +1820,27 @@ const addCustomRules = ({ targets, kind = 'auto', policy = CUSTOM_RULE_POLICY_PR
     skippedCount: results.length,
     errorCount: errors.length,
     rules,
+  }
+}
+
+const replaceCustomRulesText = ({ text, policy = CUSTOM_RULE_POLICY_PROXY }) => {
+  const normalizedPolicy = normalizeCustomRulePolicy(policy)
+  const rules = readCustomRuleEntries()
+  const nextPolicyEntries = customRuleTextToEntries(text, normalizedPolicy)
+  const nextRules = [
+    ...rules.filter((entry) => entry.policy !== normalizedPolicy),
+    ...nextPolicyEntries,
+  ]
+
+  backupCustomRulesSnapshot('before-edit', rules)
+  const writtenRules = writeCustomRuleEntries(nextRules)
+  backupCustomRulesSnapshot('after-edit', writtenRules)
+
+  return {
+    policy: normalizedPolicy,
+    rules: writtenRules,
+    updatedCount: nextPolicyEntries.filter((entry) => !isCustomRuleComment(entry.rule)).length,
+    commentCount: nextPolicyEntries.filter((entry) => isCustomRuleComment(entry.rule)).length,
   }
 }
 
@@ -6222,6 +6271,26 @@ app.post('/api/custom-rules', async (req, res) => {
   }
 })
 
+app.put('/api/custom-rules', async (req, res) => {
+  try {
+    const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
+    const policy = normalizeCustomRulePolicy(req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
+    const result = replaceCustomRulesText({
+      text: req.body?.text,
+      policy,
+    })
+    const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+    const backup = await syncCustomRulesBackupToOpenWrt('after-edit', result.rules)
+    const refresh = await startCustomRuleProviderRefresh(policy)
+
+    res.json({ ...result, cacheSync, backup, refresh })
+  } catch (error) {
+    res.status(400).json({
+      message: getErrorMessage(error),
+    })
+  }
+})
+
 app.delete('/api/custom-rules', async (req, res) => {
   try {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
@@ -6457,6 +6526,7 @@ export {
   readCustomRules,
   readCustomRulesSettings,
   readSnapshot,
+  replaceCustomRulesText as replaceCustomRulesTextForTesting,
   replaceSnapshot as replaceManagedSnapshotForTesting,
   replaceSnapshotForTesting as replaceSnapshot,
   resolveOpenClashConfigPathFromUci as resolveOpenClashConfigPathFromUciForTesting,
