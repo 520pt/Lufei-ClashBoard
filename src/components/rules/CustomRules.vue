@@ -336,6 +336,22 @@ const copyText = async (value: string) => {
   showNotification({ content: '已复制到剪切板', type: 'alert-success', timeout: 1800 })
 }
 
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+const refreshRuntimeRulesAndProxies = async () => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const results = await Promise.allSettled([fetchProxies(), fetchRules()])
+
+    if (results.every((result) => result.status === 'fulfilled')) {
+      return true
+    }
+
+    await sleep(3000)
+  }
+
+  return false
+}
+
 const handleAddRule = async () => {
   submitting.value = true
 
@@ -413,19 +429,33 @@ const confirmApplyToYaml = async () => {
 
     showNotification({
       content: result.changed
-        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重新加载配置...`
-        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重新加载配置...`,
+        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重启 ${result.pluginReload?.serviceName || result.plugin}...`
+        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重启 ${result.pluginReload?.serviceName || result.plugin}...`,
       type: result.changed ? 'alert-success' : 'alert-info',
       timeout: 6000,
     })
 
-    await reloadConfigsAPI()
-    await Promise.allSettled([fetchProxies(), fetchRules()])
+    if (result.pluginReload?.attempted && !result.pluginReload.started) {
+      showNotification({
+        content: `${result.pluginReload.serviceName} 自动重启失败：${result.pluginReload.message || '未知错误'}，请在 OpenWrt 上手动重启后再刷新页面。`,
+        type: 'alert-warning',
+        timeout: 8000,
+      })
+    }
+
+    if (result.pluginReload?.started) {
+      await sleep(12000)
+    }
+
+    await reloadConfigsAPI().catch(() => null)
+    const refreshed = await refreshRuntimeRulesAndProxies()
 
     showNotification({
-      content: '配置已重新加载，策略组和规则列表已刷新',
-      type: 'alert-success',
-      timeout: 3600,
+      content: refreshed
+        ? '配置已重新加载，策略组和规则列表已刷新'
+        : '已触发重启，但当前控制器暂未恢复，请稍后手动刷新页面',
+      type: refreshed ? 'alert-success' : 'alert-warning',
+      timeout: refreshed ? 3600 : 8000,
     })
   } catch (error) {
     showNotification({

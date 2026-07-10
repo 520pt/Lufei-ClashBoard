@@ -495,6 +495,12 @@ export type ApplyCustomRuleYamlResult = {
   addedProvider: boolean
   addedRule: boolean
   addedProxyGroup: boolean
+  pluginReload?: {
+    attempted: boolean
+    serviceName: string
+    started: boolean
+    message: string
+  }
 }
 
 export const fetchCustomRulesAPI = async () => {
