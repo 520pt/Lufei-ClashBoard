@@ -42,6 +42,7 @@ const {
   seedRuleProviderCacheForTesting,
   shouldIncludeOpenWrtCandidateForTesting,
   shutdownServer,
+  syncCustomRuleProvidersToCacheForTesting,
   updateCustomRulesSettings,
 } = await import(serverModuleUrl.href)
 
@@ -724,4 +725,29 @@ test('custom rules manager generates rules and snippets', () => {
     ).proxyGroupLine,
     /name: 自定义-直连, <<: \*default/,
   )
+})
+
+test('custom rule providers are synced to local rule cache', async () => {
+  replaceSnapshot({})
+  addCustomRule({ target: 'example-cache.com', policy: 'proxy' })
+  addCustomRule({ target: 'direct-cache.com', policy: 'direct' })
+
+  const syncResult = syncCustomRuleProvidersToCacheForTesting({
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.deepEqual(syncResult.syncedProviders, ['LuFei / Custom', 'LuFei / Custom Direct'])
+  assert.equal(syncResult.providerCounts['LuFei / Custom'], 1)
+  assert.equal(syncResult.providerCounts['LuFei / Custom Direct'], 1)
+
+  const proxySearch = await searchRuleProviderCache('example-cache.com', {
+    providerNames: ['LuFei / Custom'],
+  })
+  const directSearch = await searchRuleProviderCache('direct-cache.com', {
+    providerNames: ['LuFei / Custom Direct'],
+  })
+
+  assert.equal(proxySearch.matches[0]?.name, 'LuFei / Custom')
+  assert.equal(directSearch.matches[0]?.name, 'LuFei / Custom Direct')
 })

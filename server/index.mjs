@@ -4258,6 +4258,41 @@ const saveProviderToCache = (provider, body) => {
   )
 }
 
+const syncCustomRuleProvidersToCache = ({ ruleUrl = '', directRuleUrl = '' } = {}) => {
+  const settings = readCustomRulesSettings()
+  const providers = [
+    {
+      provider: {
+        name: settings.providerName,
+        behavior: 'classical',
+        format: 'text',
+        kind: getRuleProviderKind(ruleUrl || settings.fileName, 'text', 'classical'),
+        url: ruleUrl || settings.fileName,
+        interval: 0,
+      },
+      body: readCustomRuleListText(CUSTOM_RULE_POLICY_PROXY),
+    },
+    {
+      provider: {
+        name: settings.directProviderName,
+        behavior: 'classical',
+        format: 'text',
+        kind: getRuleProviderKind(directRuleUrl || settings.directFileName, 'text', 'classical'),
+        url: directRuleUrl || settings.directFileName,
+        interval: 0,
+      },
+      body: readCustomRuleListText(CUSTOM_RULE_POLICY_DIRECT),
+    },
+  ]
+
+  providers.forEach(({ provider, body }) => saveProviderToCache(provider, body))
+
+  return {
+    syncedProviders: providers.map(({ provider }) => provider.name),
+    providerCounts: getRuleProviderCacheProviderCounts(),
+  }
+}
+
 const getRuleProviderCacheRuleCount = () => {
   const row = getRuleProviderCacheTotalCountStatement.get()
 
@@ -5545,7 +5580,7 @@ app.post('/api/proxy-group-rule-penetration', (req, res) => {
   }
 })
 
-app.get('/api/custom-rules', (req, res) => {
+const getCustomRulePublicUrlsFromRequest = (req) => {
   const settings = readCustomRulesSettings()
   const protocol = req.get('x-forwarded-proto') || req.protocol || 'http'
   const hostHeader = req.get('host') || `127.0.0.1:${port}`
@@ -5563,25 +5598,39 @@ app.get('/api/custom-rules', (req, res) => {
     openWrtHost,
   })
 
+  return {
+    settings,
+    ruleUrl,
+    directRuleUrl,
+  }
+}
+
+app.get('/api/custom-rules', (req, res) => {
+  const { settings, ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
+  const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+
   res.setHeader('Cache-Control', 'no-store')
   res.json({
     rules: readCustomRuleEntries(),
     settings,
     ruleUrl,
     directRuleUrl,
+    cacheSync,
     snippets: buildCustomRuleSnippets(ruleUrl, directRuleUrl),
   })
 })
 
 app.post('/api/custom-rules', (req, res) => {
   try {
+    const { ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
     const result = addCustomRule({
       target: req.body?.target,
       kind: req.body?.kind || 'auto',
       policy: req.body?.policy || CUSTOM_RULE_POLICY_PROXY,
     })
+    const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
-    res.json(result)
+    res.json({ ...result, cacheSync })
   } catch (error) {
     res.status(400).json({
       message: getErrorMessage(error),
@@ -5590,9 +5639,11 @@ app.post('/api/custom-rules', (req, res) => {
 })
 
 app.delete('/api/custom-rules', (req, res) => {
+  const { ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
   const result = deleteCustomRule(req.body?.rule, req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
+  const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
-  res.json(result)
+  res.json({ ...result, cacheSync })
 })
 
 app.post('/api/custom-rules/settings', (req, res) => {
@@ -5605,8 +5656,10 @@ app.post('/api/custom-rules/settings', (req, res) => {
       fileName: req.body?.fileName,
       directFileName: req.body?.directFileName,
     })
+    const { ruleUrl, directRuleUrl } = getCustomRulePublicUrlsFromRequest(req)
+    const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
-    res.json({ settings })
+    res.json({ settings, cacheSync })
   } catch (error) {
     res.status(400).json({
       message: getErrorMessage(error),
@@ -5806,5 +5859,6 @@ export {
   shouldIncludeOpenWrtCandidate as shouldIncludeOpenWrtCandidateForTesting,
   shutdownServer,
   startServer,
+  syncCustomRuleProvidersToCache as syncCustomRuleProvidersToCacheForTesting,
   updateCustomRulesSettings,
 }
