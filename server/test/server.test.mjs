@@ -888,12 +888,12 @@ test('custom rule changes keep one latest file backup in data directory', async 
   const added = addCustomRule({ target: 'backup-check.example', policy: 'proxy' })
 
   assert.equal(added.added, true)
-  assert.deepEqual(await fs.readdir(backupDir), ['latest.json'])
+  assert.deepEqual((await fs.readdir(backupDir)).sort(), ['latest-non-empty.json', 'latest.json'])
 
   const deleted = deleteCustomRuleForTesting(added.rule, 'proxy')
 
   assert.equal(deleted.removed, true)
-  assert.deepEqual(await fs.readdir(backupDir), ['latest.json'])
+  assert.deepEqual((await fs.readdir(backupDir)).sort(), ['latest-non-empty.json', 'latest.json'])
 })
 
 test('custom rules restore from latest backup when storage is empty', async () => {
@@ -910,7 +910,7 @@ test('custom rules restore from latest backup when storage is empty', async () =
   assert.equal(restoreCustomRulesFromBackupForTesting(), true)
   assert.deepEqual(readCustomRules('proxy'), ['DOMAIN-SUFFIX,restore-check.example'])
   assert.equal(readCustomRulesSettings().policyGroup, 'restored-group')
-  assert.deepEqual(await fs.readdir(backupDir), ['latest.json'])
+  assert.deepEqual((await fs.readdir(backupDir)).sort(), ['latest-non-empty.json', 'latest.json'])
 })
 
 test('proxy group penetration cache expires when provider cache changes', () => {

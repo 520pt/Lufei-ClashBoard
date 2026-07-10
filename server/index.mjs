@@ -41,7 +41,12 @@ const mihomoBinaryPath =
 const ruleSearchTempDir = path.join(dataDir, 'rule-search-temp')
 const customRuleBackupDir = path.join(dataDir, 'custom-rule-backups')
 const customRuleLatestBackupFileName = 'latest.json'
+const customRuleLatestNonEmptyBackupFileName = 'latest-non-empty.json'
 const customRuleLatestBackupPath = path.join(customRuleBackupDir, customRuleLatestBackupFileName)
+const customRuleLatestNonEmptyBackupPath = path.join(
+  customRuleBackupDir,
+  customRuleLatestNonEmptyBackupFileName,
+)
 const proxyGroupRulePenetrationCache = new Map()
 const proxyGroupRulePenetrationCacheBySignature = new Map()
 const PROXY_GROUP_RULE_PENETRATION_CACHE_TTL_MS = 10 * 60 * 1000
@@ -522,21 +527,48 @@ const normalizeCustomRulePolicy = (policy) => {
   return policy === CUSTOM_RULE_POLICY_DIRECT ? CUSTOM_RULE_POLICY_DIRECT : CUSTOM_RULE_POLICY_PROXY
 }
 
-const cleanupCustomRuleBackups = (keepFileName = customRuleLatestBackupFileName) => {
+const cleanupCustomRuleBackups = (
+  keepFileNames = [customRuleLatestBackupFileName, customRuleLatestNonEmptyBackupFileName],
+) => {
   if (!fs.existsSync(customRuleBackupDir)) {
     return
   }
 
+  const keepNames = new Set(Array.isArray(keepFileNames) ? keepFileNames : [keepFileNames])
+
   fs.readdirSync(customRuleBackupDir)
-    .filter((name) => name.endsWith('.json') && name !== keepFileName)
+    .filter((name) => name.endsWith('.json') && !keepNames.has(name))
     .forEach((name) => {
       fs.unlinkSync(path.join(customRuleBackupDir, name))
     })
 }
 
+const readCustomRuleBackupFile = (backupPath) => {
+  if (!backupPath || !fs.existsSync(backupPath)) {
+    return null
+  }
+
+  try {
+    const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8'))
+
+    if (!backup || typeof backup !== 'object' || !Array.isArray(backup.rules)) {
+      return null
+    }
+
+    return backup
+  } catch (error) {
+    console.warn('[custom-rules] failed to read custom rules backup', error)
+    return null
+  }
+}
+
 const findLatestCustomRuleBackupPath = () => {
   if (fs.existsSync(customRuleLatestBackupPath)) {
     return customRuleLatestBackupPath
+  }
+
+  if (fs.existsSync(customRuleLatestNonEmptyBackupPath)) {
+    return customRuleLatestNonEmptyBackupPath
   }
 
   if (!fs.existsSync(customRuleBackupDir)) {
@@ -551,24 +583,27 @@ const findLatestCustomRuleBackupPath = () => {
   return backupFiles.length ? path.join(customRuleBackupDir, backupFiles.at(-1)) : ''
 }
 
+const createCustomRulesBackupPayload = (reason, rules, settings = readCustomRulesSettings()) => ({
+  reason,
+  createdAt: new Date().toISOString(),
+  rules,
+  settings,
+})
+
+const writeCustomRulesBackupFile = (backupPath, payload) => {
+  fs.writeFileSync(backupPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+}
+
 const backupCustomRulesSnapshot = (reason, rules, settings = readCustomRulesSettings()) => {
   try {
     fs.mkdirSync(customRuleBackupDir, { recursive: true })
 
-    fs.writeFileSync(
-      customRuleLatestBackupPath,
-      `${JSON.stringify(
-        {
-          reason,
-          createdAt: new Date().toISOString(),
-          rules,
-          settings,
-        },
-        null,
-        2,
-      )}\n`,
-      'utf8',
-    )
+    const payload = createCustomRulesBackupPayload(reason, rules, settings)
+    writeCustomRulesBackupFile(customRuleLatestBackupPath, payload)
+
+    if (Array.isArray(rules) && rules.length > 0) {
+      writeCustomRulesBackupFile(customRuleLatestNonEmptyBackupPath, payload)
+    }
 
     cleanupCustomRuleBackups()
 
@@ -721,29 +756,20 @@ const updateCustomRulesSettings = (settings = {}, options = {}) => {
   return next
 }
 
+const hasCustomRuleStorageKey = () => Boolean(getStorageValueStatement.get(CUSTOM_RULES_KEY))
+
 const readCustomRulesBackup = () => {
-  const backupPath = findLatestCustomRuleBackupPath()
+  const latestBackup = readCustomRuleBackupFile(findLatestCustomRuleBackupPath())
 
-  if (!backupPath) {
-    return null
+  if (latestBackup?.rules?.length > 0) {
+    return latestBackup
   }
 
-  try {
-    const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8'))
-
-    if (!backup || typeof backup !== 'object' || !Array.isArray(backup.rules)) {
-      return null
-    }
-
-    return backup
-  } catch (error) {
-    console.warn('[custom-rules] failed to read custom rules backup', error)
-    return null
-  }
+  return readCustomRuleBackupFile(customRuleLatestNonEmptyBackupPath)
 }
 
-const restoreCustomRulesFromBackupIfEmpty = () => {
-  if (readCustomRuleEntries().length > 0) {
+const restoreCustomRulesFromBackupIfMissing = () => {
+  if (hasCustomRuleStorageKey()) {
     return false
   }
 
@@ -755,12 +781,12 @@ const restoreCustomRulesFromBackupIfEmpty = () => {
 
   const restoredRules = writeCustomRuleEntries(backup.rules)
   const restoredSettings = updateCustomRulesSettings(backup.settings, { backup: false })
-  backupCustomRulesSnapshot('restore', restoredRules, restoredSettings)
+  backupCustomRulesSnapshot('restore-local', restoredRules, restoredSettings)
 
   return true
 }
 
-restoreCustomRulesFromBackupIfEmpty()
+restoreCustomRulesFromBackupIfMissing()
 
 const buildCustomRuleSnippets = (ruleUrl, directRuleUrl) => {
   const settings = readCustomRulesSettings()
@@ -2100,6 +2126,111 @@ const writeRemoteFile = async (client, filePath, content) => {
       stream.end(content)
     })
   })
+}
+
+const getRemoteCustomRuleBackupPaths = (configPath) => {
+  const configDir = path.posix.dirname(String(configPath || defaultOpenClashConfigDir))
+
+  return {
+    latest: path.posix.join(configDir, '.lufei-custom-rules.latest.json'),
+    latestNonEmpty: path.posix.join(configDir, '.lufei-custom-rules.latest-non-empty.json'),
+  }
+}
+
+const syncCustomRulesBackupToOpenWrt = async (
+  reason,
+  rules = readCustomRuleEntries(),
+  settings = readCustomRulesSettings(),
+) => {
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    return { ok: false, skipped: true, reason: 'OpenWrt SSH is not configured' }
+  }
+
+  try {
+    const snapshot = await getOpenWrtRuleSourceSnapshot({ config, required: true })
+    const remoteBackupPaths = getRemoteCustomRuleBackupPaths(snapshot.configPath)
+    const payload = createCustomRulesBackupPayload(reason, rules, settings)
+    const payloadText = `${JSON.stringify(payload, null, 2)}\n`
+
+    await withOpenWrtSshClient(config, async (client) => {
+      await sshExec(client, `mkdir -p ${shellQuote(path.posix.dirname(remoteBackupPaths.latest))}`)
+      await writeRemoteFile(client, remoteBackupPaths.latest, payloadText)
+
+      if (Array.isArray(rules) && rules.length > 0) {
+        await writeRemoteFile(client, remoteBackupPaths.latestNonEmpty, payloadText)
+      }
+    })
+
+    return {
+      ok: true,
+      path: remoteBackupPaths.latest,
+      nonEmptyPath: Array.isArray(rules) && rules.length > 0 ? remoteBackupPaths.latestNonEmpty : '',
+    }
+  } catch (error) {
+    console.warn('[custom-rules] failed to sync OpenWrt backup', error)
+    return { ok: false, message: getErrorMessage(error) }
+  }
+}
+
+const readOpenWrtCustomRulesBackup = async () => {
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    return null
+  }
+
+  try {
+    const snapshot = await getOpenWrtRuleSourceSnapshot({ config, required: true })
+    const remoteBackupPaths = getRemoteCustomRuleBackupPaths(snapshot.configPath)
+
+    return await withOpenWrtSshClient(config, async (client) => {
+      const latestExists = await remoteFileExists(client, remoteBackupPaths.latest)
+      if (latestExists) {
+        const latestBackup = JSON.parse(await readRemoteFile(client, remoteBackupPaths.latest))
+        if (latestBackup?.rules?.length > 0) {
+          return latestBackup
+        }
+      }
+
+      const latestNonEmptyExists = await remoteFileExists(client, remoteBackupPaths.latestNonEmpty)
+      if (!latestNonEmptyExists) {
+        return null
+      }
+
+      const latestNonEmptyBackup = JSON.parse(
+        await readRemoteFile(client, remoteBackupPaths.latestNonEmpty),
+      )
+
+      return latestNonEmptyBackup?.rules?.length > 0 ? latestNonEmptyBackup : null
+    })
+  } catch (error) {
+    console.warn('[custom-rules] failed to read OpenWrt backup', error)
+    return null
+  }
+}
+
+const restoreCustomRulesFromOpenWrtBackupIfMissing = async () => {
+  if (hasCustomRuleStorageKey()) {
+    return false
+  }
+
+  const backup = await readOpenWrtCustomRulesBackup()
+
+  if (!backup || backup.rules.length === 0) {
+    return false
+  }
+
+  const restoredRules = writeCustomRuleEntries(backup.rules)
+  const restoredSettings = updateCustomRulesSettings(backup.settings, { backup: false })
+  backupCustomRulesSnapshot('restore-openwrt', restoredRules, restoredSettings)
+
+  return true
+}
+
+const restoreCustomRulesIfMissing = async () => {
+  return restoreCustomRulesFromBackupIfMissing() || (await restoreCustomRulesFromOpenWrtBackupIfMissing())
 }
 
 const remotePathExists = async (client, filePath) => {
@@ -5985,6 +6116,8 @@ const getCustomRulePublicUrlsFromRequest = async (req) => {
 
 app.get('/api/custom-rules', async (req, res) => {
   try {
+    await restoreCustomRulesIfMissing()
+
     const { settings, ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
 
@@ -6028,14 +6161,15 @@ app.post('/api/custom-rules', async (req, res) => {
     }
 
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+    const backup = await syncCustomRulesBackupToOpenWrt('after-add', result.rules)
     const refresh = await startCustomRuleProviderRefresh(result.policy)
 
     if (!isBatchRequest && result.results.length === 1) {
-      res.json({ ...result.results[0], rules: result.rules, cacheSync, refresh })
+      res.json({ ...result.results[0], rules: result.rules, cacheSync, backup, refresh })
       return
     }
 
-    res.json({ ...result, cacheSync, refresh })
+    res.json({ ...result, cacheSync, backup, refresh })
   } catch (error) {
     res.status(400).json({
       message: getErrorMessage(error),
@@ -6048,8 +6182,9 @@ app.delete('/api/custom-rules', async (req, res) => {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const result = deleteCustomRule(req.body?.rule, req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+    const backup = await syncCustomRulesBackupToOpenWrt('after-delete', result.rules)
 
-    res.json({ ...result, cacheSync })
+    res.json({ ...result, cacheSync, backup })
   } catch (error) {
     res.status(500).json({
       message: getErrorMessage(error),
@@ -6069,8 +6204,13 @@ app.post('/api/custom-rules/settings', async (req, res) => {
     })
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
+    const backup = await syncCustomRulesBackupToOpenWrt(
+      'settings',
+      readCustomRuleEntries(),
+      settings,
+    )
 
-    res.json({ settings, cacheSync })
+    res.json({ settings, cacheSync, backup })
   } catch (error) {
     res.status(400).json({
       message: getErrorMessage(error),
@@ -6078,13 +6218,17 @@ app.post('/api/custom-rules/settings', async (req, res) => {
   }
 })
 
-app.get('/ziyong.list', (_req, res) => {
+app.get('/ziyong.list', async (_req, res) => {
+  await restoreCustomRulesIfMissing()
+
   res.setHeader('Cache-Control', 'no-store')
   res.type('text/plain')
   res.send(readCustomRuleListText(CUSTOM_RULE_POLICY_PROXY))
 })
 
-app.get('/ziyong-direct.list', (_req, res) => {
+app.get('/ziyong-direct.list', async (_req, res) => {
+  await restoreCustomRulesIfMissing()
+
   res.setHeader('Cache-Control', 'no-store')
   res.type('text/plain')
   res.send(readCustomRuleListText(CUSTOM_RULE_POLICY_DIRECT))
@@ -6268,7 +6412,7 @@ export {
   readSnapshot,
   replaceSnapshot,
   resolveOpenClashConfigPathFromUci as resolveOpenClashConfigPathFromUciForTesting,
-  restoreCustomRulesFromBackupIfEmpty as restoreCustomRulesFromBackupForTesting,
+  restoreCustomRulesFromBackupIfMissing as restoreCustomRulesFromBackupForTesting,
   searchRuleProviderCache,
   seedRuleProviderCacheForTesting,
   server,
