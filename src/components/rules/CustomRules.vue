@@ -1,103 +1,150 @@
 <template>
   <div class="flex flex-col gap-3">
-    <div class="card app-card-padding gap-4">
-      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <div class="text-xl font-semibold">自定义规则集</div>
-            <div class="badge badge-primary badge-sm">ziyong.list</div>
-            <div class="badge badge-success badge-sm">ziyong-direct.list</div>
-            <div class="badge badge-ghost badge-sm">
-              {{ customRules?.rules.length || 0 }} 条规则
+    <div class="grid gap-3 lg:grid-cols-2">
+      <div class="card app-card-padding gap-4">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="text-xl font-semibold">自定义规则集</div>
+              <div class="badge badge-primary badge-sm">ziyong.list</div>
+              <div class="badge badge-success badge-sm">ziyong-direct.list</div>
+              <div class="badge badge-ghost badge-sm">
+                {{ customRules?.rules.length || 0 }} 条规则
+              </div>
+            </div>
+            <div class="text-base-content/70 mt-1 text-sm">
+              在这里维护自己的域名、网址和 IP，保存后会立即更新到规则集地址。
             </div>
           </div>
-          <div class="text-base-content/70 mt-1 text-sm">
-            在这里维护自己的域名、网址和 IP，保存后会立即更新到规则集地址。
-          </div>
+          <button
+            class="btn btn-sm"
+            type="button"
+            :disabled="loading"
+            @click="loadCustomRules"
+          >
+            刷新
+          </button>
         </div>
-        <button
-          class="btn btn-sm"
-          type="button"
-          :disabled="loading"
-          @click="loadCustomRules"
+
+        <div
+          v-if="errorMessage"
+          class="alert alert-error py-2 text-sm"
         >
-          刷新
-        </button>
-      </div>
+          {{ errorMessage }}
+        </div>
 
-      <div
-        v-if="errorMessage"
-        class="alert alert-error py-2 text-sm"
-      >
-        {{ errorMessage }}
-      </div>
-
-      <div class="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
-        <div class="bg-base-200 rounded-box flex min-w-0 flex-col gap-2 p-3">
-          <div class="flex items-center justify-between gap-2">
-            <div class="text-sm font-semibold">规则地址</div>
+        <div class="grid gap-3">
+          <div class="bg-base-200 rounded-box flex min-w-0 flex-col gap-2 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-sm font-semibold">规则地址</div>
+              <button
+                class="btn btn-xs"
+                type="button"
+                @click="copyText(customRules?.ruleUrl || '')"
+              >
+                复制
+              </button>
+            </div>
             <button
-              class="btn btn-xs"
+              class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
               type="button"
               @click="copyText(customRules?.ruleUrl || '')"
             >
-              复制
+              <span class="text-primary mr-2 font-sans">代理</span>{{ customRules?.ruleUrl || '-' }}
             </button>
+            <button
+              class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
+              type="button"
+              @click="copyText(customRules?.directRuleUrl || '')"
+            >
+              <span class="text-success mr-2 font-sans">直连</span
+              >{{ customRules?.directRuleUrl || '-' }}
+            </button>
+            <div class="text-base-content/60 text-xs">
+              把这个地址填到 YAML 的 <code>rule-providers</code> 里，OpenClash 会读取这里的规则。
+            </div>
+          </div>
+
+          <form
+            class="bg-base-200 rounded-box grid gap-2 p-3 md:grid-cols-[1fr_1fr_auto]"
+            @submit.prevent="handleSaveSettings"
+          >
+            <div class="text-sm font-semibold md:col-span-3">自定义</div>
+            <label class="form-control min-w-0">
+              <span class="label-text mb-1 text-xs">代理</span>
+              <input
+                v-model.trim="policyGroup"
+                class="input input-bordered input-sm"
+                placeholder="自定义-代理 或 zidingyi-daili"
+                required
+              />
+            </label>
+            <label class="form-control min-w-0">
+              <span class="label-text mb-1 text-xs">直连</span>
+              <input
+                v-model.trim="directPolicyGroup"
+                class="input input-bordered input-sm"
+                placeholder="自定义-直连 或 zidingyi-zhilian"
+                required
+              />
+            </label>
+            <button
+              class="btn btn-sm self-end"
+              type="submit"
+              :disabled="submitting"
+            >
+              保存名称
+            </button>
+            <div class="text-base-content/60 text-xs md:col-span-3">
+              默认写入“自定义-代理”和“自定义-直连”；如果 OpenClash 中中文显示异常，就改成拼音。
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="card app-card-padding gap-3">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div class="font-semibold">YAML 添加说明</div>
+            <div class="text-base-content/60 text-xs">
+              可以复制下面三段手动添加，也可以通过规则源 SSH 一键写入当前使用的 YAML。
+            </div>
           </div>
           <button
-            class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
+            class="btn btn-primary btn-sm"
             type="button"
-            @click="copyText(customRules?.ruleUrl || '')"
+            :disabled="submitting || !customRules?.ruleUrl"
+            @click="applyDialogVisible = true"
           >
-            <span class="text-primary mr-2 font-sans">代理</span>{{ customRules?.ruleUrl || '-' }}
+            一键写入当前 YAML
           </button>
-          <button
-            class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
-            type="button"
-            @click="copyText(customRules?.directRuleUrl || '')"
-          >
-            <span class="text-success mr-2 font-sans">直连</span
-            >{{ customRules?.directRuleUrl || '-' }}
-          </button>
-          <div class="text-base-content/60 text-xs">
-            把这个地址填到 YAML 的 <code>rule-providers</code> 里，OpenClash 会读取这里的规则。
-          </div>
         </div>
 
-        <form
-          class="bg-base-200 rounded-box grid gap-2 p-3 md:grid-cols-[1fr_1fr_auto]"
-          @submit.prevent="handleSaveSettings"
-        >
-          <div class="text-sm font-semibold md:col-span-3">自定义</div>
-          <label class="form-control min-w-0">
-            <span class="label-text mb-1 text-xs">代理</span>
-            <input
-              v-model.trim="policyGroup"
-              class="input input-bordered input-sm"
-              placeholder="自定义-代理 或 zidingyi-daili"
-              required
-            />
-          </label>
-          <label class="form-control min-w-0">
-            <span class="label-text mb-1 text-xs">直连</span>
-            <input
-              v-model.trim="directPolicyGroup"
-              class="input input-bordered input-sm"
-              placeholder="自定义-直连 或 zidingyi-zhilian"
-              required
-            />
-          </label>
-          <button
-            class="btn btn-sm self-end"
-            type="submit"
-            :disabled="submitting"
+        <div class="grid gap-2">
+          <div
+            v-for="snippet in snippets"
+            :key="snippet.title"
+            class="bg-base-200 rounded-box flex min-w-0 flex-col gap-2 p-3 text-xs"
           >
-            保存名称
-          </button>
-          <div class="text-base-content/60 text-xs md:col-span-3">
-            默认写入“自定义-代理”和“自定义-直连”；如果 OpenClash 中中文显示异常，就改成拼音。
+            <div class="flex items-center justify-between gap-2">
+              <div class="font-semibold">{{ snippet.title }}</div>
+              <button
+                class="btn btn-xs"
+                type="button"
+                @click="copyText(snippet.value)"
+              >
+                复制
+              </button>
+            </div>
+            <button
+              class="bg-base-100 rounded-box border-base-300 hover:border-primary min-h-16 border p-2 text-left font-mono break-all transition-colors"
+              type="button"
+              @click="copyText(snippet.value)"
+            >
+              {{ snippet.value || '-' }}
+            </button>
           </div>
-        </form>
+        </div>
       </div>
     </div>
 
@@ -148,51 +195,6 @@
           <option value="raw">原始规则</option>
         </select>
       </form>
-    </div>
-
-    <div class="card app-card-padding gap-3">
-      <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div class="font-semibold">YAML 添加说明</div>
-          <div class="text-base-content/60 text-xs">
-            可以复制下面三段手动添加，也可以通过规则源 SSH 一键写入当前使用的 YAML。
-          </div>
-        </div>
-        <button
-          class="btn btn-primary btn-sm"
-          type="button"
-          :disabled="submitting || !customRules?.ruleUrl"
-          @click="applyDialogVisible = true"
-        >
-          一键写入当前 YAML
-        </button>
-      </div>
-
-      <div class="grid gap-2 lg:grid-cols-3">
-        <div
-          v-for="snippet in snippets"
-          :key="snippet.title"
-          class="bg-base-200 rounded-box flex min-w-0 flex-col gap-2 p-3 text-xs"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <div class="font-semibold">{{ snippet.title }}</div>
-            <button
-              class="btn btn-xs"
-              type="button"
-              @click="copyText(snippet.value)"
-            >
-              复制
-            </button>
-          </div>
-          <button
-            class="bg-base-100 rounded-box border-base-300 hover:border-primary min-h-16 border p-2 text-left font-mono break-all transition-colors"
-            type="button"
-            @click="copyText(snippet.value)"
-          >
-            {{ snippet.value || '-' }}
-          </button>
-        </div>
-      </div>
     </div>
 
     <div class="card app-card-padding gap-3">
