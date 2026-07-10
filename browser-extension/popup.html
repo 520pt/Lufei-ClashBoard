@@ -28,14 +28,23 @@
       </header>
 
       <section class="content">
-        <label class="field field-first">
-          <span class="label">面板地址</span>
+        <div class="field field-first">
+          <div class="field-heading">
+            <span class="label">面板地址</span>
+            <button
+              id="open-panel"
+              type="button"
+              class="inline-button"
+            >
+              打开面板
+            </button>
+          </div>
           <input
             id="server-url"
             class="input"
             placeholder="http://10.0.0.11:2048"
           />
-        </label>
+        </div>
 
         <div class="actions compact-actions">
           <button
@@ -55,13 +64,21 @@
         </div>
 
         <div class="target-box">
-          <div class="label">自动识别</div>
-          <div
-            id="target"
-            class="target-line"
-          >
-            正在读取当前标签页...
+          <div class="field-heading">
+            <div class="label">目标地址</div>
+            <button
+              id="refresh"
+              type="button"
+              class="inline-button"
+            >
+              重新识别
+            </button>
           </div>
+          <input
+            id="manual-target"
+            class="input"
+            placeholder="正在读取当前标签页..."
+          />
           <div
             id="kind"
             class="hint"
@@ -83,16 +100,6 @@
             <option value="raw">原始规则</option>
           </select>
           <span class="hint">会按当前网页自动选中，也可以手动切换。</span>
-        </label>
-
-        <label class="field">
-          <span class="label">手动目标，可留空</span>
-          <input
-            id="manual-target"
-            class="input"
-            placeholder="例如 example.com 或 1.1.1.1"
-          />
-          <span class="hint">填写后会自动判断 DOMAIN-SUFFIX 或 IP-CIDR。</span>
         </label>
 
         <label class="switch-line">
@@ -133,23 +140,6 @@
         >
           添加到自定义规则
         </button>
-
-        <div class="actions">
-          <button
-            id="open-panel"
-            type="button"
-            class="button button-ghost"
-          >
-            打开面板
-          </button>
-          <button
-            id="refresh"
-            type="button"
-            class="button button-ghost"
-          >
-            重新识别
-          </button>
-        </div>
 
         <div
           id="status"

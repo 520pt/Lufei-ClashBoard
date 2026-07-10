@@ -1,4 +1,3 @@
-const targetEl = document.querySelector('#target')
 const kindEl = document.querySelector('#kind')
 const ruleKindEl = document.querySelector('#rule-kind')
 const statusEl = document.querySelector('#status')
@@ -43,7 +42,7 @@ const setPolicy = (policy) => {
   })
 }
 
-const renderDetected = (detected) => {
+const renderDetected = (detected, options = {}) => {
   currentDetected = detected || { target: '', kind: 'domain_suffix', kindLabel: 'DOMAIN-SUFFIX' }
   const detectedKind = currentDetected.kind || 'domain_suffix'
   const autoOption = ruleKindEl.querySelector('option[value="auto"]')
@@ -60,10 +59,13 @@ const renderDetected = (detected) => {
     ruleKindEl.value = detectedKind
   }
 
-  targetEl.textContent = currentDetected.target || '当前页面不可添加'
+  if (options.syncInput) {
+    manualTargetEl.value = currentDetected.target || ''
+  }
+
   kindEl.textContent = currentDetected.target
     ? `已自动识别：${currentDetected.kindLabel}`
-    : '规则类型：无法识别'
+    : '规则类型：请输入目标或点击重新识别'
 }
 
 const getFormSettings = () => ({
@@ -94,14 +96,14 @@ const refreshCurrentTab = async () => {
   serverUrlEl.value = currentSettings.serverUrl
   preferRootDomainEl.checked = currentSettings.preferRootDomain !== false
   setPolicy(currentSettings.defaultPolicy || 'proxy')
-  renderDetected(response.detected)
+  renderDetected(response.detected, { syncInput: true })
 }
 
 const refreshManualTarget = async () => {
   const target = manualTargetEl.value.trim()
 
   if (!target) {
-    await refreshCurrentTab()
+    renderDetected({ target: '', kind: 'domain_suffix', kindLabel: 'DOMAIN-SUFFIX' })
     return
   }
 
@@ -181,7 +183,10 @@ addButton.addEventListener('click', async () => {
     }
 
     const result = response.result
-    renderDetected({ target: result.target, kind: result.kind, kindLabel: result.kindLabel })
+    renderDetected(
+      { target: result.target, kind: result.kind, kindLabel: result.kindLabel },
+      { syncInput: true },
+    )
     const refreshText = result.refresh?.started
       ? '，已自动刷新规则源'
       : result.refresh?.ok
@@ -205,7 +210,6 @@ openPanelButton.addEventListener('click', async () => {
 
 refreshButton.addEventListener('click', async () => {
   try {
-    manualTargetEl.value = ''
     await refreshCurrentTab()
     setStatus('已重新识别当前网站', 'ok')
   } catch (error) {
@@ -218,6 +222,6 @@ ruleKindEl.addEventListener('change', () => {
 })
 
 refreshCurrentTab().catch((error) => {
-  targetEl.textContent = '读取失败'
+  manualTargetEl.placeholder = '读取失败，可手动输入 example.com 或 1.1.1.1'
   setStatus(error instanceof Error ? error.message : String(error), 'error')
 })

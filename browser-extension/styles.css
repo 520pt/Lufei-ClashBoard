@@ -84,9 +84,17 @@ body {
   margin-top: 14px;
 }
 
+.field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
 .label {
   display: block;
-  margin-bottom: 7px;
+  margin-bottom: 0;
   color: #4b5563;
   font-size: 12px;
   font-weight: 700;
@@ -115,19 +123,11 @@ body {
 }
 
 .target-box {
+  margin-top: 12px;
   padding: 11px;
   border: 1px solid rgba(135, 113, 250, 0.16);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
-}
-
-.target-line {
-  overflow: hidden;
-  color: #111827;
-  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .hint {
@@ -153,7 +153,7 @@ body {
 .button {
   min-height: 38px;
   cursor: pointer;
-  border: 0;
+  border: 1px solid #111827;
   border-radius: 13px;
   font-weight: 800;
   transition:
@@ -163,8 +163,8 @@ body {
 }
 
 .segmented button {
-  background: #f0eefc;
-  color: #6757c8;
+  background: rgba(255, 255, 255, 0.68);
+  color: #111827;
 }
 
 .segmented button.active {
@@ -181,21 +181,32 @@ body {
 .button-primary {
   width: 100%;
   margin-top: 16px;
-  background: linear-gradient(135deg, #8771fa, #6b5cf6);
-  color: #ffffff;
-  box-shadow: 0 16px 36px rgba(135, 113, 250, 0.28);
+  background: rgba(255, 255, 255, 0.7);
+  color: #111827;
 }
 
 .button-ghost {
-  background: #f3f4f6;
-  color: #4b5563;
+  background: rgba(255, 255, 255, 0.68);
+  color: #111827;
 }
 
 .actions {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 12px;
+}
+
+.inline-button {
+  cursor: pointer;
+  border: 1px solid #111827;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 8px;
 }
 
 .status {
