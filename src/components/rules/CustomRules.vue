@@ -281,12 +281,16 @@ import {
   fetchCustomRulesAPI,
   reloadConfigsAPI,
   updateCustomRulesSettingsAPI,
+  updateRuleProviderAPI,
   type CustomRulesPayload,
 } from '@/api'
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
+import { CUSTOM_PROXY_GROUP_ICON } from '@/helper/autoImportSettings'
 import { showNotification } from '@/helper/notification'
 import { fetchProxies } from '@/store/proxies'
 import { fetchRules } from '@/store/rules'
+import { iconReflectList } from '@/store/settings'
+import { v4 as uuid } from 'uuid'
 import { computed, onMounted, ref } from 'vue'
 
 const customRules = ref<CustomRulesPayload | null>(null)
@@ -322,6 +326,7 @@ const loadCustomRules = async () => {
   try {
     customRules.value = await fetchCustomRulesAPI()
     policyGroup.value = customRules.value.settings.policyGroup
+    ensureCustomPolicyGroupIcon(policyGroup.value)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -352,18 +357,61 @@ const refreshRuntimeRulesAndProxies = async () => {
   return false
 }
 
+const ensureCustomPolicyGroupIcon = (name: string) => {
+  const policyGroupName = name.trim()
+
+  if (!policyGroupName) return
+
+  const existing = iconReflectList.value.find((item) => item.name === policyGroupName)
+
+  if (existing) {
+    if (!existing.icon) {
+      existing.icon = CUSTOM_PROXY_GROUP_ICON
+    }
+    return
+  }
+
+  iconReflectList.value.push({
+    name: policyGroupName,
+    icon: CUSTOM_PROXY_GROUP_ICON,
+    uuid: uuid(),
+  })
+}
+
+const refreshCustomRuleProvider = async () => {
+  const providerName = customRules.value?.settings.providerName
+
+  if (!providerName) return false
+
+  try {
+    await updateRuleProviderAPI(providerName)
+    await fetchRules()
+    return true
+  } catch (error) {
+    showNotification({
+      content: `规则已保存，但规则源暂未刷新：${error instanceof Error ? error.message : String(error)}`,
+      type: 'alert-warning',
+      timeout: 5000,
+    })
+    return false
+  }
+}
+
 const handleAddRule = async () => {
   submitting.value = true
 
   try {
     const result = await addCustomRuleAPI(target.value, kind.value)
     target.value = ''
+    await loadCustomRules()
+    const refreshed = await refreshCustomRuleProvider()
     showNotification({
-      content: result.added ? `已添加：${result.rule}` : `已存在：${result.rule}`,
+      content: result.added
+        ? `已添加：${result.rule}${refreshed ? '，规则源已刷新' : ''}`
+        : `已存在：${result.rule}${refreshed ? '，规则源已刷新' : ''}`,
       type: result.added ? 'alert-success' : 'alert-info',
       timeout: 2200,
     })
-    await loadCustomRules()
   } catch (error) {
     showNotification({
       content: error instanceof Error ? error.message : String(error),
@@ -389,8 +437,13 @@ const confirmDeleteRule = async () => {
     await deleteCustomRuleAPI(rule)
     deleteDialogVisible.value = false
     pendingDeleteRule.value = ''
-    showNotification({ content: `已删除：${rule}`, type: 'alert-success', timeout: 2200 })
     await loadCustomRules()
+    const refreshed = await refreshCustomRuleProvider()
+    showNotification({
+      content: `已删除：${rule}${refreshed ? '，规则源已刷新' : ''}`,
+      type: 'alert-success',
+      timeout: 2200,
+    })
   } catch (error) {
     showNotification({
       content: error instanceof Error ? error.message : String(error),
@@ -406,6 +459,7 @@ const handleSaveSettings = async () => {
 
   try {
     await updateCustomRulesSettingsAPI({ policyGroup: policyGroup.value })
+    ensureCustomPolicyGroupIcon(policyGroup.value)
     showNotification({ content: `已保存代理策略名称：${policyGroup.value}`, type: 'alert-success' })
     await loadCustomRules()
   } catch (error) {
@@ -426,6 +480,13 @@ const confirmApplyToYaml = async () => {
   try {
     const result = await applyCustomRuleToActiveYamlAPI(customRules.value.ruleUrl)
     applyDialogVisible.value = false
+    ensureCustomPolicyGroupIcon(result.policyGroup || policyGroup.value)
+
+    if (result.policyGroup && result.policyGroup !== policyGroup.value) {
+      await updateCustomRulesSettingsAPI({ policyGroup: result.policyGroup })
+      policyGroup.value = result.policyGroup
+      await loadCustomRules()
+    }
 
     showNotification({
       content: result.changed

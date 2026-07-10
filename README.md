@@ -34,10 +34,10 @@ YAML 中会使用类似配置：
 
 ```yaml
 proxy-groups:
-  - {name: 路飞, <<: *default}
+  - {name: 自定义, <<: *default}
 
 rules:
-  - RULE-SET,LuFei / Custom,路飞
+  - RULE-SET,LuFei / Custom,自定义
 
 rule-providers:
   LuFei / Custom: {<<: *class, url: "http://<面板IP>:<端口>/ziyong.list"}
