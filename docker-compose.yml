@@ -1,0 +1,11 @@
+services:
+  lufei-clashboard:
+    image: ghcr.io/520pt/lufei-clashboard:latest
+    container_name: lufei-clashboard
+    restart: unless-stopped
+    ports:
+      - '${PORT:-2048}:2048'
+    environment:
+      PORT: 2048
+    volumes:
+      - ./data:/app/data

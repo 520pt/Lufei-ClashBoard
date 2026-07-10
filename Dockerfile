@@ -33,6 +33,7 @@ ENV NODE_ENV=production
 ENV PORT=2048
 
 EXPOSE 2048
+VOLUME ["/app/data"]
 
 CMD ["node", "server/index.mjs"]
 
