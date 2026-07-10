@@ -451,16 +451,16 @@ const refreshCustomRuleProvider = async (policy: CustomRulePolicy) => {
   if (!providerName) return false
 
   try {
-    await updateRuleProviderAPI(providerName)
+    await updateRuleProviderAPI(providerName, { skipErrorNotification: true })
     await fetchRules()
     return true
   } catch (error) {
     showNotification({
-      content: `规则已保存，但${getPolicyLabel(policy)}规则源暂未刷新：${
+      content: `规则已保存，但${getPolicyLabel(policy)}规则源暂未刷新。请先点击“一键写入当前 YAML”并等待核心重启；如果已经写入，请确认 YAML 里的规则地址是 OpenWrt 可访问的 NAS/局域网 IP。详情：${
         error instanceof Error ? error.message : String(error)
       }`,
       type: 'alert-warning',
-      timeout: 5000,
+      timeout: 9000,
     })
     return false
   }

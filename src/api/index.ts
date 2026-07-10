@@ -24,6 +24,12 @@ import { debounce } from 'lodash'
 import ReconnectingWebSocket from 'reconnectingwebsocket'
 import { computed, nextTick, ref, watch } from 'vue'
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipErrorNotification?: boolean
+  }
+}
+
 axios.interceptors.request.use((config) => {
   if (shouldUseServerProxy(activeBackend.value)) {
     config.baseURL = '/api/controller'
@@ -65,7 +71,10 @@ axios.interceptors.response.use(
       nextTick(() => {
         showNotification({ content: 'unauthorizedTip' })
       })
-    } else if (!ignoreNotificationUrls.some((url) => error.config?.url?.endsWith(url))) {
+    } else if (
+      !error.config?.skipErrorNotification &&
+      !ignoreNotificationUrls.some((url) => error.config?.url?.endsWith(url))
+    ) {
       const errorMessage = error.response?.data?.message || error.message
 
       showNotification({
@@ -190,8 +199,13 @@ export const fetchRuleProvidersAPI = () => {
   return axios.get<{ providers: Record<string, RuleProvider> }>('/providers/rules')
 }
 
-export const updateRuleProviderAPI = (name: string) => {
-  return axios.put(`/providers/rules/${encodeURIComponent(name)}`)
+export const updateRuleProviderAPI = (
+  name: string,
+  options: { skipErrorNotification?: boolean } = {},
+) => {
+  return axios.put(`/providers/rules/${encodeURIComponent(name)}`, undefined, {
+    skipErrorNotification: options.skipErrorNotification,
+  })
 }
 
 export const blockConnectionByIdAPI = (id: string) => {
