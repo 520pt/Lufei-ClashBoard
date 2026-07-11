@@ -488,6 +488,45 @@ rule-providers:
   assert.equal(second.content, first.content)
 })
 
+test('custom rule YAML apply updates stale custom provider urls', () => {
+  const source = `default: &default
+  type: select
+  proxies:
+    - DIRECT
+
+proxy-groups:
+  - {name: 自定义-代理, <<: *default}
+  - {name: 自定义-直连, <<: *default}
+
+rules:
+  - RULE-SET,LuFei / Custom,自定义-代理
+  - RULE-SET,LuFei / Custom Direct,自定义-直连
+  - MATCH,DIRECT
+
+provider-class:
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
+rule-providers:
+  LuFei / Custom: {<<: *class, url: "http://10.0.0.11:2048/ziyong.list"}
+  LuFei / Custom Direct: {<<: *class, url: "http://10.0.0.11:2048/ziyong-direct.list"}
+`
+
+  const result = applyCustomRuleProviderToYamlContentForTesting(source, {
+    providerName: 'LuFei / Custom',
+    directProviderName: 'LuFei / Custom Direct',
+    policyGroup: '自定义-代理',
+    directPolicyGroup: '自定义-直连',
+    ruleUrl: 'http://10.0.0.10:2048/ziyong.list',
+    directRuleUrl: 'http://10.0.0.10:2048/ziyong-direct.list',
+  })
+
+  assert.equal(result.changed, true)
+  assert.equal(result.updatedProvider, true)
+  assert.doesNotMatch(result.content, /10\.0\.0\.11/)
+  assert.match(result.content, /url: "http:\/\/10\.0\.0\.10:2048\/ziyong\.list"/)
+  assert.match(result.content, /url: "http:\/\/10\.0\.0\.10:2048\/ziyong-direct\.list"/)
+})
+
 test('custom rule YAML apply removes legacy single custom policy group', () => {
   const source = `default: &default
   type: select

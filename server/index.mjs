@@ -983,16 +983,6 @@ const resolvePublicCustomRuleLocalAddresses = async ({ hostHeader, openWrtHost }
   return openWrtVisibleClientIpv4 ? [openWrtVisibleClientIpv4] : undefined
 }
 
-const shouldReplaceCustomRuleUrl = (value) => {
-  try {
-    const hostname = new URL(String(value || '')).hostname
-
-    return isLoopbackPublicHost(hostname) || isDockerBridgeIpv4Address(hostname)
-  } catch {
-    return false
-  }
-}
-
 const normalizeYamlInlineValue = (value, fallback) => {
   const normalizedValue = String(value || '')
     .trim()
@@ -5820,10 +5810,7 @@ app.post('/api/openwrt-rule-source/detect', async (req, res) => {
 app.post('/api/openwrt-rule-source/apply-custom', async (req, res) => {
   try {
     const { ruleUrl: publicRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
-    const requestedRuleUrl = normalizeYamlInlineValue(req.body?.ruleUrl, publicRuleUrl)
-    const ruleUrl = shouldReplaceCustomRuleUrl(requestedRuleUrl)
-      ? publicRuleUrl
-      : requestedRuleUrl
+    const ruleUrl = publicRuleUrl
     const result = await applyCustomRuleProviderToOpenWrtYaml({ ruleUrl })
 
     res.json({
