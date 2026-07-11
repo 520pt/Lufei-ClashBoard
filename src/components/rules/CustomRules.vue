@@ -33,31 +33,47 @@
 
         <div class="grid gap-3">
           <div class="bg-base-200 rounded-box flex min-w-0 flex-col gap-2 p-3">
-            <div class="flex items-center justify-between gap-2">
-              <div class="text-sm font-semibold">规则地址</div>
+            <div class="text-sm font-semibold">规则地址</div>
+            <div
+              class="bg-base-100 rounded-box border-base-300 flex min-w-0 items-center gap-2 border p-2"
+            >
               <button
-                class="btn btn-primary btn-xs"
+                class="min-w-0 flex-1 text-left font-mono text-xs break-all"
                 type="button"
+                @click="copyText(customRules?.ruleUrl || '')"
+              >
+                <span class="text-primary mr-2 font-sans font-semibold">代理</span
+                >{{ customRules?.ruleUrl || '-' }}
+              </button>
+              <button
+                class="btn btn-primary btn-xs shrink-0"
+                type="button"
+                :disabled="!customRules?.ruleUrl"
                 @click="copyText(customRules?.ruleUrl || '')"
               >
                 复制
               </button>
             </div>
-            <button
-              class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
-              type="button"
-              @click="copyText(customRules?.ruleUrl || '')"
+            <div
+              class="bg-base-100 rounded-box border-base-300 flex min-w-0 items-center gap-2 border p-2"
             >
-              <span class="text-primary mr-2 font-sans">代理</span>{{ customRules?.ruleUrl || '-' }}
-            </button>
-            <button
-              class="bg-base-100 rounded-box border-base-300 hover:border-primary w-full border p-3 text-left font-mono text-xs break-all transition-colors"
-              type="button"
-              @click="copyText(customRules?.directRuleUrl || '')"
-            >
-              <span class="text-success mr-2 font-sans">直连</span
-              >{{ customRules?.directRuleUrl || '-' }}
-            </button>
+              <button
+                class="min-w-0 flex-1 text-left font-mono text-xs break-all"
+                type="button"
+                @click="copyText(customRules?.directRuleUrl || '')"
+              >
+                <span class="text-success mr-2 font-sans font-semibold">直连</span
+                >{{ customRules?.directRuleUrl || '-' }}
+              </button>
+              <button
+                class="btn btn-success btn-xs shrink-0"
+                type="button"
+                :disabled="!customRules?.directRuleUrl"
+                @click="copyText(customRules?.directRuleUrl || '')"
+              >
+                复制
+              </button>
+            </div>
             <div class="text-base-content/60 text-xs">
               把这个地址填到 YAML 的 <code>rule-providers</code> 里，OpenClash 会读取这里的规则。
             </div>
@@ -426,8 +442,35 @@ const loadCustomRules = async () => {
 const copyText = async (value: string) => {
   if (!value) return
 
-  await navigator.clipboard.writeText(value)
-  showNotification({ content: '已复制到剪切板', type: 'alert-success', timeout: 1800 })
+  try {
+    await navigator.clipboard.writeText(value)
+    showNotification({ content: '已复制到剪切板', type: 'alert-success', timeout: 1800 })
+    return
+  } catch (error) {
+    console.warn('Failed to copy custom rule text with navigator.clipboard, falling back', error)
+  }
+
+  const textArea = document.createElement('textarea')
+  textArea.value = value
+  textArea.setAttribute('readonly', 'readonly')
+  textArea.style.position = 'fixed'
+  textArea.style.opacity = '0'
+  document.body.appendChild(textArea)
+  textArea.select()
+
+  try {
+    document.execCommand('copy')
+    showNotification({ content: '已复制到剪切板', type: 'alert-success', timeout: 1800 })
+  } catch (fallbackError) {
+    console.warn('Failed to copy custom rule text with fallback', fallbackError)
+    showNotification({
+      content: '复制失败，请手动选择文本复制',
+      type: 'alert-error',
+      timeout: 2400,
+    })
+  } finally {
+    document.body.removeChild(textArea)
+  }
 }
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
