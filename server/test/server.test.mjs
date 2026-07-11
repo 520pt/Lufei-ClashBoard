@@ -33,6 +33,7 @@ const {
   getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
+  getOpenClashRuntimeConfigPathForTesting,
   getProxyGroupRulePenetrationCacheEntryForTesting,
   getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPathForTesting,
@@ -426,6 +427,13 @@ test('custom rule YAML backup keeps one latest LuFei backup', () => {
   assert.match(cleanupCommand, /-name 'lufei\.yaml\.lufei-\*\.bak'/)
   assert.match(cleanupCommand, /! -name 'lufei\.yaml\.lufei-latest\.bak'/)
   assert.match(cleanupCommand, /-exec rm -f \{\} \+/)
+})
+
+test('OpenClash runtime config path points to generated config file', () => {
+  assert.equal(
+    getOpenClashRuntimeConfigPathForTesting('/etc/openclash/config/lufei.yaml'),
+    '/etc/openclash/lufei.yaml',
+  )
 })
 
 test('custom rule YAML apply updates old single custom provider to proxy and direct providers', () => {

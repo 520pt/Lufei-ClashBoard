@@ -218,12 +218,12 @@ export const getIPv6ByName = (proxyName: string) => {
 
 let fetchTime = 0
 
-export const fetchProxies = async () => {
+export const fetchProxies = async (options: { skipErrorNotification?: boolean } = {}) => {
   const nowTime = Date.now()
 
   fetchTime = nowTime
 
-  const proxyRes = await fetchProxiesAPI()
+  const proxyRes = await fetchProxiesAPI({ skipErrorNotification: options.skipErrorNotification })
   const providerRes = await fetchProxyProviderAPI({ skipErrorNotification: true })
   const proxyData = proxyRes.data
   const providerData = 'data' in providerRes ? providerRes.data : { providers: {} }

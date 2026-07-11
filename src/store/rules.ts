@@ -183,7 +183,10 @@ export const visibleRuleProviderList = computed(() => {
       const rightReferencedOrder = referencedRuleProviderOrderIndexMap.value.get(right.name)
 
       if (leftReferencedOrder !== undefined || rightReferencedOrder !== undefined) {
-        return (leftReferencedOrder ?? Number.MAX_SAFE_INTEGER) - (rightReferencedOrder ?? Number.MAX_SAFE_INTEGER)
+        return (
+          (leftReferencedOrder ?? Number.MAX_SAFE_INTEGER) -
+          (rightReferencedOrder ?? Number.MAX_SAFE_INTEGER)
+        )
       }
 
       const leftOrder = ruleProviderOrderIndexMap.value.get(left.name)
@@ -248,9 +251,13 @@ export const ruleRefreshDisplayText = computed(() => {
   return ''
 })
 
-export const fetchRules = async () => {
-  const { data: ruleData } = await fetchRulesAPI()
-  const { data: providerData } = await fetchRuleProvidersAPI()
+export const fetchRules = async (options: { skipErrorNotification?: boolean } = {}) => {
+  const { data: ruleData } = await fetchRulesAPI({
+    skipErrorNotification: options.skipErrorNotification,
+  })
+  const { data: providerData } = await fetchRuleProvidersAPI({
+    skipErrorNotification: options.skipErrorNotification,
+  })
 
   rules.value = ruleData.rules.map((rule) => {
     const proxy = rule.proxy
@@ -264,8 +271,10 @@ export const fetchRules = async () => {
   ruleProviderList.value = Object.values(providerData.providers)
 }
 
-export const fetchRuleProviders = async () => {
-  const { data: providerData } = await fetchRuleProvidersAPI()
+export const fetchRuleProviders = async (options: { skipErrorNotification?: boolean } = {}) => {
+  const { data: providerData } = await fetchRuleProvidersAPI({
+    skipErrorNotification: options.skipErrorNotification,
+  })
   ruleProviderList.value = Object.values(providerData.providers)
 }
 
@@ -328,7 +337,9 @@ export const startBackgroundRuleRefresh = async (
 
   if (!response.ok) {
     const errorBody = (await response.json().catch(() => null)) as { message?: string } | null
-    throw new Error(errorBody?.message || `Failed to start background rule refresh: ${response.status}`)
+    throw new Error(
+      errorBody?.message || `Failed to start background rule refresh: ${response.status}`,
+    )
   }
 
   return (await response.json()) as {
@@ -360,7 +371,9 @@ export const cancelBackgroundRuleRefresh = async () => {
 
   if (!response.ok) {
     const errorBody = (await response.json().catch(() => null)) as { message?: string } | null
-    throw new Error(errorBody?.message || `Failed to cancel background rule refresh: ${response.status}`)
+    throw new Error(
+      errorBody?.message || `Failed to cancel background rule refresh: ${response.status}`,
+    )
   }
 
   return (await response.json()) as {

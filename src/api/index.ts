@@ -117,8 +117,10 @@ watch(
   { immediate: true },
 )
 
-export const fetchProxiesAPI = () => {
-  return axios.get<{ proxies: Record<string, Proxy> }>('/proxies')
+export const fetchProxiesAPI = (options: { skipErrorNotification?: boolean } = {}) => {
+  return axios.get<{ proxies: Record<string, Proxy> }>('/proxies', {
+    skipErrorNotification: options.skipErrorNotification,
+  })
 }
 
 export const selectProxyAPI = (proxyGroup: string, name: string) => {
@@ -185,8 +187,10 @@ export const proxyProviderHealthCheckAPI = (name: string) => {
   )
 }
 
-export const fetchRulesAPI = () => {
-  return axios.get<{ rules: Rule[] }>('/rules')
+export const fetchRulesAPI = (options: { skipErrorNotification?: boolean } = {}) => {
+  return axios.get<{ rules: Rule[] }>('/rules', {
+    skipErrorNotification: options.skipErrorNotification,
+  })
 }
 
 export const toggleRuleDisabledAPI = (data: Record<number, boolean>) => {
@@ -197,8 +201,10 @@ export const toggleRuleDisabledSingBoxAPI = (uuid: string) => {
   return axios.put(`/rules/${encodeURIComponent(uuid)}`)
 }
 
-export const fetchRuleProvidersAPI = () => {
-  return axios.get<{ providers: Record<string, RuleProvider> }>('/providers/rules')
+export const fetchRuleProvidersAPI = (options: { skipErrorNotification?: boolean } = {}) => {
+  return axios.get<{ providers: Record<string, RuleProvider> }>('/providers/rules', {
+    skipErrorNotification: options.skipErrorNotification,
+  })
 }
 
 export const updateRuleProviderAPI = (
@@ -523,8 +529,11 @@ export type ApplyCustomRuleYamlResult = {
   ok: boolean
   plugin: string
   configPath: string
+  runtimeConfigPath?: string
   backupPath: string
   changed: boolean
+  sourceChanged?: boolean
+  runtimeChanged?: boolean
   addedProvider: boolean
   updatedProvider?: boolean
   addedRule: boolean

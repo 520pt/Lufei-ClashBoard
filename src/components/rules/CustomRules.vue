@@ -484,9 +484,15 @@ const isCustomRuntimeReady = (requireRuleCounts = true) => {
   return hasRules && (!requireRuleCounts || hasExpectedRuleCounts)
 }
 
+const silentRefreshRuntimeState = () =>
+  Promise.allSettled([
+    fetchProxies({ skipErrorNotification: true }),
+    fetchRules({ skipErrorNotification: true }),
+  ])
+
 const refreshRuntimeRulesAndProxies = async () => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const results = await Promise.allSettled([fetchProxies(), fetchRules()])
+    const results = await silentRefreshRuntimeState()
 
     if (results.every((result) => result.status === 'fulfilled')) {
       return true
@@ -500,7 +506,7 @@ const refreshRuntimeRulesAndProxies = async () => {
 
 const waitForCustomRuntimeReady = async (attempts = 18, delay = 2500, requireRuleCounts = true) => {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await Promise.allSettled([fetchProxies(), fetchRules()])
+    await silentRefreshRuntimeState()
 
     if (isCustomRuntimeReady(requireRuleCounts)) {
       return true
@@ -532,12 +538,12 @@ const refreshAllCustomRuleProviders = async () => {
 }
 
 const restartCoreAndVerifyCustomRules = async () => {
-  let restartError = ''
+  let activateError = ''
 
   try {
-    await restartCoreAPI({ skipErrorNotification: true })
+    await reloadConfigsAPI({ skipErrorNotification: true })
   } catch (error) {
-    restartError = error instanceof Error ? error.message : String(error)
+    activateError = error instanceof Error ? error.message : String(error)
   }
 
   if (
@@ -548,9 +554,9 @@ const restartCoreAndVerifyCustomRules = async () => {
   }
 
   try {
-    await reloadConfigsAPI({ skipErrorNotification: true })
+    await restartCoreAPI({ skipErrorNotification: true })
   } catch (error) {
-    restartError = restartError || (error instanceof Error ? error.message : String(error))
+    activateError = activateError || (error instanceof Error ? error.message : String(error))
   }
 
   if (
@@ -561,8 +567,8 @@ const restartCoreAndVerifyCustomRules = async () => {
   }
 
   throw new Error(
-    `核心重启后仍未检测到自定义规则集，请检查 OpenClash 是否已加载当前 YAML，以及规则地址是否可访问${
-      restartError ? `。底层错误：${restartError}` : ''
+    `配置重载/核心重启后仍未检测到自定义规则集，请检查 OpenClash 是否已加载当前 YAML，以及规则地址是否可访问${
+      activateError ? `。底层错误：${activateError}` : ''
     }`,
   )
 }
@@ -747,8 +753,12 @@ const confirmApplyToYaml = async () => {
 
     showNotification({
       content: result.changed
-        ? `已写入当前 YAML：${result.configPath}，备份：${result.backupPath}，正在重启核心...`
-        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重启核心...`,
+        ? `已更新 YAML：${result.configPath}${
+            result.runtimeChanged && result.runtimeConfigPath
+              ? `，并同步运行配置：${result.runtimeConfigPath}`
+              : ''
+          }${result.backupPath ? `，备份：${result.backupPath}` : ''}，正在重载配置...`
+        : `当前 YAML 已经包含自定义规则：${result.configPath}，正在重载配置...`,
       type: result.changed ? 'alert-success' : 'alert-info',
       timeout: 6000,
     })
@@ -758,8 +768,8 @@ const confirmApplyToYaml = async () => {
 
     showNotification({
       content: refreshed
-        ? '核心已重启，并已确认自定义规则集加载成功'
-        : '核心已重启并确认自定义规则集加载成功，但列表刷新暂未完成，请稍后手动刷新页面',
+        ? '配置已重载，并已确认自定义规则集加载成功'
+        : '配置已重载并确认自定义规则集加载成功，但列表刷新暂未完成，请稍后手动刷新页面',
       type: refreshed ? 'alert-success' : 'alert-warning',
       timeout: refreshed ? 4200 : 8000,
     })

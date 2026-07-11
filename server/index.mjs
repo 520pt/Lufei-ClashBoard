@@ -2873,6 +2873,25 @@ const getRemoteYamlBackupCleanupCommand = (configPath, keepBackupPath = getRemot
   ].join(' ')
 }
 
+const getOpenClashRuntimeConfigPath = (configPath) => {
+  const configBaseName = path.posix.basename(String(configPath || '').trim())
+
+  return configBaseName ? path.posix.join('/etc/openclash', configBaseName) : ''
+}
+
+const writeRemoteFileAtomically = async (client, filePath, content) => {
+  const tempPath = `${filePath}.lufei-${Date.now()}.tmp`
+
+  await writeRemoteFile(client, tempPath, content)
+
+  const moveResult = await sshExec(client, `mv ${shellQuote(tempPath)} ${shellQuote(filePath)}`)
+
+  if (moveResult.code !== 0) {
+    await sshExec(client, `rm -f ${shellQuote(tempPath)}`).catch(() => null)
+    throw new Error(moveResult.stderr.trim() || `Failed to update remote YAML: ${filePath}`)
+  }
+}
+
 const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
   const config = readOpenWrtRuleSourceSshConfig()
 
@@ -2895,6 +2914,8 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       directRuleUrl: directRuleUrl.toString(),
     })
     let backupPath = ''
+    let runtimeConfigPath = ''
+    let runtimeChanged = false
 
     if (applyResult.changed) {
       backupPath = getRemoteYamlBackupPath(snapshot.configPath)
@@ -2921,19 +2942,31 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
         )
       }
 
-      const tempPath = `${snapshot.configPath}.lufei-${Date.now()}.tmp`
-      await writeRemoteFile(client, tempPath, applyResult.content)
+      await writeRemoteFileAtomically(client, snapshot.configPath, applyResult.content)
+    }
 
-      const moveResult = await sshExec(
-        client,
-        `mv ${shellQuote(tempPath)} ${shellQuote(snapshot.configPath)}`,
-      )
+    if (snapshot.plugin === 'openclash') {
+      runtimeConfigPath = getOpenClashRuntimeConfigPath(snapshot.configPath)
 
-      if (moveResult.code !== 0) {
-        await sshExec(client, `rm -f ${shellQuote(tempPath)}`).catch(() => null)
-        throw new Error(
-          moveResult.stderr.trim() || `Failed to update remote YAML: ${snapshot.configPath}`,
-        )
+      if (
+        runtimeConfigPath &&
+        runtimeConfigPath !== snapshot.configPath &&
+        (await remoteFileExists(client, runtimeConfigPath))
+      ) {
+        const runtimeContent = await readRemoteFile(client, runtimeConfigPath)
+        const runtimeApplyResult = applyCustomRuleProviderToYamlContent(runtimeContent, {
+          providerName: settings.providerName,
+          directProviderName: settings.directProviderName,
+          policyGroup: settings.policyGroup,
+          directPolicyGroup: settings.directPolicyGroup,
+          ruleUrl,
+          directRuleUrl: directRuleUrl.toString(),
+        })
+
+        if (runtimeApplyResult.changed) {
+          await writeRemoteFileAtomically(client, runtimeConfigPath, runtimeApplyResult.content)
+          runtimeChanged = true
+        }
       }
     }
 
@@ -2941,8 +2974,11 @@ const applyCustomRuleProviderToOpenWrtYaml = async ({ ruleUrl }) => {
       ok: true,
       plugin: snapshot.plugin,
       configPath: snapshot.configPath,
+      runtimeConfigPath,
       backupPath,
-      changed: applyResult.changed,
+      changed: applyResult.changed || runtimeChanged,
+      sourceChanged: applyResult.changed,
+      runtimeChanged,
       addedProvider: applyResult.addedProvider,
       updatedProvider: applyResult.updatedProvider,
       addedRule: applyResult.addedRule,
@@ -6503,6 +6539,7 @@ export {
   getOpenWrtHttpSignals as getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
+  getOpenClashRuntimeConfigPath as getOpenClashRuntimeConfigPathForTesting,
   getProxyGroupRulePenetrationCacheEntry as getProxyGroupRulePenetrationCacheEntryForTesting,
   getRemoteYamlBackupCleanupCommand as getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPath as getRemoteYamlBackupPathForTesting,
