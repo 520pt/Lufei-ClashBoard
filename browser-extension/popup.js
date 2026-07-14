@@ -9,11 +9,16 @@ const saveSettingsButton = document.querySelector('#save-settings')
 const testConnectionButton = document.querySelector('#test-connection')
 const openPanelButton = document.querySelector('#open-panel')
 const refreshButton = document.querySelector('#refresh')
+const refreshStatusButton = document.querySelector('#refresh-status')
+const ruleStatusEl = document.querySelector('#rule-status')
+const deleteRuleButton = document.querySelector('#delete-rule')
+const switchPolicyButton = document.querySelector('#switch-policy')
 const policyButtons = [...document.querySelectorAll('[data-policy]')]
 
 let currentPolicy = 'proxy'
 let currentDetected = { target: '', kind: 'domain_suffix', kindLabel: 'DOMAIN-SUFFIX' }
 let currentSettings = null
+let currentRuleStatus = null
 let manualDetectTimer = 0
 
 const KIND_LABELS = {
@@ -42,6 +47,36 @@ const setPolicy = (policy) => {
   policyButtons.forEach((button) => {
     button.classList.toggle('active', button.dataset.policy === currentPolicy)
   })
+}
+
+const setRuleActionDisabled = (disabled) => {
+  refreshStatusButton.disabled = disabled
+  deleteRuleButton.disabled = disabled || !currentRuleStatus?.found
+  switchPolicyButton.disabled = disabled || !currentDetected.target
+}
+
+const renderRuleStatus = (status) => {
+  currentRuleStatus = status
+
+  if (!status) {
+    ruleStatusEl.textContent = '未读取'
+    ruleStatusEl.className = 'rule-status'
+    setRuleActionDisabled(false)
+    return
+  }
+
+  if (status.found) {
+    const policyText = status.policy === 'direct' ? '直连' : '代理'
+    const conflictText = status.conflicts?.length ? `，另有 ${status.conflicts.length} 条重复` : ''
+
+    ruleStatusEl.textContent = `已存在于${policyText}：${status.rule}${conflictText}`
+    ruleStatusEl.className = `rule-status ${status.policy === 'direct' ? 'direct' : 'proxy'}`
+  } else {
+    ruleStatusEl.textContent = `未添加：${status.rule || currentDetected.target || '-'}`
+    ruleStatusEl.className = 'rule-status empty'
+  }
+
+  setRuleActionDisabled(false)
 }
 
 const renderDetected = (detected, options = {}) => {
@@ -99,6 +134,7 @@ const refreshCurrentTab = async () => {
   preferRootDomainEl.checked = currentSettings.preferRootDomain !== false
   setPolicy(currentSettings.defaultPolicy || 'proxy')
   renderDetected(response.detected, { syncInput: true })
+  await refreshRuleStatus({ silent: true })
 }
 
 const refreshManualTarget = async () => {
@@ -106,11 +142,16 @@ const refreshManualTarget = async () => {
 
   if (!target) {
     renderDetected({ target: '', kind: 'domain_suffix', kindLabel: 'DOMAIN-SUFFIX' })
+    renderRuleStatus(null)
     return
   }
 
   if (isBatchTarget(target)) {
     kindEl.textContent = '规则类型：批量输入将逐行处理'
+    ruleStatusEl.textContent = '批量输入请添加后到面板统一管理'
+    ruleStatusEl.className = 'rule-status'
+    currentRuleStatus = null
+    setRuleActionDisabled(false)
     return
   }
 
@@ -121,6 +162,50 @@ const refreshManualTarget = async () => {
   }
 
   renderDetected(response.detected)
+  await refreshRuleStatus({ silent: true })
+}
+
+const refreshRuleStatus = async ({ silent = false } = {}) => {
+  const manualTarget = manualTargetEl.value.trim()
+
+  if (!manualTarget && !currentDetected.target) {
+    renderRuleStatus(null)
+    return
+  }
+
+  if (manualTarget && isBatchTarget(manualTarget)) {
+    ruleStatusEl.textContent = '批量输入请添加后到面板统一管理'
+    ruleStatusEl.className = 'rule-status'
+    currentRuleStatus = null
+    setRuleActionDisabled(false)
+    return
+  }
+
+  setRuleActionDisabled(true)
+  if (!silent) {
+    ruleStatusEl.textContent = '正在读取状态...'
+    ruleStatusEl.className = 'rule-status'
+  }
+
+  try {
+    await saveCurrentSettings()
+    const response = await sendMessage({
+      type: 'get-current-rule-status',
+      kind: ruleKindEl.value,
+      target: manualTarget || undefined,
+    })
+
+    if (!response?.ok) {
+      throw new Error(response?.message || '读取状态失败')
+    }
+
+    renderRuleStatus(response.result)
+  } catch (error) {
+    currentRuleStatus = null
+    ruleStatusEl.textContent = error instanceof Error ? error.message : String(error)
+    ruleStatusEl.className = 'rule-status error'
+    setRuleActionDisabled(false)
+  }
 }
 
 policyButtons.forEach((button) => {
@@ -146,6 +231,7 @@ preferRootDomainEl.addEventListener('change', async () => {
 saveSettingsButton.addEventListener('click', async () => {
   try {
     await saveCurrentSettings()
+    await refreshRuleStatus({ silent: true })
     setStatus('面板地址已保存', 'ok')
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error')
@@ -211,6 +297,7 @@ addButton.addEventListener('click', async () => {
       : `${result.added ? '已添加' : '已存在'}：${result.rule}`
 
     setStatus(`${resultText}${refreshText}`, 'ok')
+    await refreshRuleStatus({ silent: true })
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error')
   } finally {
@@ -234,6 +321,66 @@ refreshButton.addEventListener('click', async () => {
 
 ruleKindEl.addEventListener('change', () => {
   ruleKindEl.dataset.touched = 'true'
+  refreshRuleStatus({ silent: true }).catch((error) =>
+    setStatus(error instanceof Error ? error.message : String(error), 'error'),
+  )
+})
+
+refreshStatusButton.addEventListener('click', async () => {
+  await refreshRuleStatus()
+})
+
+deleteRuleButton.addEventListener('click', async () => {
+  deleteRuleButton.disabled = true
+  setStatus('正在删除...', '')
+
+  try {
+    const response = await sendMessage({
+      type: 'delete-current-rule',
+      kind: ruleKindEl.value,
+      target: manualTargetEl.value.trim() || undefined,
+    })
+
+    if (!response?.ok) {
+      throw new Error(response?.message || '删除失败')
+    }
+
+    setStatus(response.result.removed ? '已删除并刷新规则源' : '当前规则不存在', 'ok')
+    await refreshRuleStatus({ silent: true })
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), 'error')
+  } finally {
+    deleteRuleButton.disabled = false
+    setRuleActionDisabled(false)
+  }
+})
+
+switchPolicyButton.addEventListener('click', async () => {
+  switchPolicyButton.disabled = true
+  setStatus('正在切换策略...', '')
+
+  try {
+    const nextPolicy = currentRuleStatus?.policy === 'direct' ? 'proxy' : 'direct'
+    const response = await sendMessage({
+      type: 'switch-current-rule-policy',
+      kind: ruleKindEl.value,
+      target: manualTargetEl.value.trim() || undefined,
+      policy: nextPolicy,
+    })
+
+    if (!response?.ok) {
+      throw new Error(response?.message || '切换失败')
+    }
+
+    setPolicy(nextPolicy)
+    setStatus(`已切换到${nextPolicy === 'direct' ? '直连' : '代理'}并刷新规则源`, 'ok')
+    await refreshRuleStatus({ silent: true })
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), 'error')
+  } finally {
+    switchPolicyButton.disabled = false
+    setRuleActionDisabled(false)
+  }
 })
 
 refreshCurrentTab().catch((error) => {

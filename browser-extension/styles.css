@@ -206,6 +206,45 @@ textarea.input {
   margin-top: 9px;
 }
 
+.rule-state {
+  margin-top: 9px;
+  padding: 8px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.rule-status {
+  overflow: hidden;
+  padding: 7px 9px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+
+.rule-status.proxy {
+  border-color: rgba(135, 113, 250, 0.42);
+  color: #5b21b6;
+}
+
+.rule-status.direct {
+  border-color: rgba(16, 185, 129, 0.42);
+  color: #047857;
+}
+
+.rule-status.error {
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #dc2626;
+}
+
+.rule-status.empty {
+  color: #6b7280;
+}
+
 .inline-button {
   cursor: pointer;
   border: 0.5px solid #111827;

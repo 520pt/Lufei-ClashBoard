@@ -295,6 +295,42 @@ const addCustomRule = async ({ target, kind, policy, serverUrl }) => {
   return data
 }
 
+const getCustomRuleStatus = async ({ target, kind, serverUrl }) => {
+  const url = new URL(`${normalizeServerUrl(serverUrl)}/api/custom-rules/status`)
+  url.searchParams.set('target', target)
+  url.searchParams.set('kind', kind || 'auto')
+
+  const response = await fetch(url.toString(), {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  })
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data.message || `请求失败：HTTP ${response.status}`)
+  }
+
+  return data
+}
+
+const deleteCustomRule = async ({ rule, policy, serverUrl }) => {
+  const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/custom-rules`, {
+    method: 'DELETE',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rule, policy }),
+  })
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data.message || `请求失败：HTTP ${response.status}`)
+  }
+
+  return data
+}
+
 const notify = async (title, message) => {
   await chrome.notifications.create({
     type: 'basic',
@@ -361,6 +397,122 @@ const addCurrentTabRule = async ({ policy, kind, target: targetOverride, url } =
     kind: finalKind,
     kindLabel: finalKind === 'auto' ? detected.kindLabel : RULE_KIND_LABELS[finalKind],
     serverUrl: settings.serverUrl,
+  }
+}
+
+const resolveCurrentRuleTarget = async ({ kind, target: targetOverride, url } = {}) => {
+  const settings = await getSettings()
+  const tab = await getActiveTab()
+  const rawTargetOverride = String(targetOverride || '').trim()
+  const batchTarget = rawTargetOverride && isBatchRuleTarget(rawTargetOverride)
+  const detected =
+    rawTargetOverride && !batchTarget
+      ? detectRuleFromHost({ host: targetOverride, preferRootDomain: settings.preferRootDomain })
+      : detectRuleFromUrl({
+          url: url || tab?.url || '',
+          preferRootDomain: settings.preferRootDomain,
+        })
+  const finalKind = normalizeRuleKind(kind, detected.kind)
+
+  if (batchTarget) {
+    throw new Error('批量输入不支持查询当前状态，请添加后到面板管理')
+  }
+
+  if (!detected.target) {
+    throw new Error('当前页面不是可识别的网站')
+  }
+
+  return {
+    settings,
+    detected,
+    target: detected.target,
+    kind: finalKind,
+    kindLabel: finalKind === 'auto' ? detected.kindLabel : RULE_KIND_LABELS[finalKind],
+  }
+}
+
+const getCurrentRuleStatus = async ({ kind, target, url } = {}) => {
+  const resolved = await resolveCurrentRuleTarget({ kind, target, url })
+  const status = await getCustomRuleStatus({
+    target: resolved.target,
+    kind: resolved.kind,
+    serverUrl: resolved.settings.serverUrl,
+  })
+
+  return {
+    ...status,
+    target: resolved.target,
+    kind: resolved.kind,
+    kindLabel: resolved.kindLabel,
+  }
+}
+
+const deleteCurrentRule = async ({ kind, target, url } = {}) => {
+  const resolved = await resolveCurrentRuleTarget({ kind, target, url })
+  const status = await getCustomRuleStatus({
+    target: resolved.target,
+    kind: resolved.kind,
+    serverUrl: resolved.settings.serverUrl,
+  })
+
+  if (!status.found) {
+    return {
+      removed: false,
+      status,
+      target: resolved.target,
+      kind: resolved.kind,
+      kindLabel: resolved.kindLabel,
+    }
+  }
+
+  const result = await deleteCustomRule({
+    rule: status.rule,
+    policy: status.policy,
+    serverUrl: resolved.settings.serverUrl,
+  })
+
+  await notify('LuFei 自定义规则', `已删除：${status.rule}`)
+
+  return {
+    ...result,
+    target: resolved.target,
+    kind: resolved.kind,
+    kindLabel: resolved.kindLabel,
+  }
+}
+
+const switchCurrentRulePolicy = async ({ kind, target, policy, url } = {}) => {
+  const resolved = await resolveCurrentRuleTarget({ kind, target, url })
+  const nextPolicy = policy === 'direct' ? 'direct' : 'proxy'
+  const status = await getCustomRuleStatus({
+    target: resolved.target,
+    kind: resolved.kind,
+    serverUrl: resolved.settings.serverUrl,
+  })
+
+  if (status.found) {
+    await deleteCustomRule({
+      rule: status.rule,
+      policy: status.policy,
+      serverUrl: resolved.settings.serverUrl,
+    })
+  }
+
+  const result = await addCustomRule({
+    target: status.rule || resolved.target,
+    kind: 'raw',
+    policy: nextPolicy,
+    serverUrl: resolved.settings.serverUrl,
+  })
+
+  await notify('LuFei 自定义规则', `已切换到${POLICY_LABELS[nextPolicy]}：${result.rule}`)
+
+  return {
+    ...result,
+    target: resolved.target,
+    policy: nextPolicy,
+    kind: resolved.kind,
+    kindLabel: resolved.kindLabel,
   }
 }
 
@@ -455,6 +607,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message?.type === 'add-current-tab-rule') {
       sendResponse({ ok: true, result: await addCurrentTabRule(message) })
+      return
+    }
+
+    if (message?.type === 'get-current-rule-status') {
+      sendResponse({ ok: true, result: await getCurrentRuleStatus(message) })
+      return
+    }
+
+    if (message?.type === 'delete-current-rule') {
+      sendResponse({ ok: true, result: await deleteCurrentRule(message) })
+      return
+    }
+
+    if (message?.type === 'switch-current-rule-policy') {
+      sendResponse({ ok: true, result: await switchCurrentRulePolicy(message) })
       return
     }
 

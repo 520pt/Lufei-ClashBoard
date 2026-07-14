@@ -23,6 +23,8 @@ const {
   applyCustomRuleProviderToYamlContentForTesting,
   buildPublicCustomRuleUrlForTesting,
   buildCustomRuleSnippets,
+  buildCustomRuleConflictReportForTesting,
+  buildLufeiDiagnosticsForTesting,
   clashControllerDiscoveryPortsForTesting,
   createAccessSessionTokenForTesting,
   deleteCustomRuleForTesting,
@@ -37,6 +39,7 @@ const {
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
   getOpenClashRuntimeConfigPathForTesting,
+  getCustomRuleStatusForTesting,
   getProxyDomainRuleConflictForTesting,
   getProxyGroupRulePenetrationCacheEntryForTesting,
   getRemoteYamlBackupCleanupCommandForTesting,
@@ -45,6 +48,7 @@ const {
   isLikelyClashControllerResultForTesting,
   makeCustomRule,
   normalizeWritableProxyDomainRuleInputForTesting,
+  parseCustomRuleGroupsForTesting,
   parseProxyDomainCustomRulesFromYamlContentForTesting,
   rejectProxyDomainRuleConflictForTesting,
   readCustomRuleListText,
@@ -1632,4 +1636,83 @@ test('proxy domain rule conflict is rejected with source details', () => {
       return true
     },
   )
+})
+
+
+test('custom rule groups are parsed from comment headings per policy', () => {
+  const groups = parseCustomRuleGroupsForTesting([
+    { rule: '# PT', policy: 'proxy' },
+    { rule: 'DOMAIN-KEYWORD,m-team', policy: 'proxy' },
+    { rule: 'DOMAIN-SUFFIX,cnboy.org', policy: 'proxy' },
+    { rule: 'DOMAIN-SUFFIX,example.cn', policy: 'direct' },
+    { rule: '# DNS', policy: 'direct' },
+    { rule: 'IP-CIDR,8.8.8.8/32,no-resolve', policy: 'direct' },
+  ])
+
+  assert.deepEqual(
+    groups.map((group) => ({ policy: group.policy, name: group.name, ruleCount: group.ruleCount })),
+    [
+      { policy: 'proxy', name: 'PT', ruleCount: 2 },
+      { policy: 'direct', name: '未分组', ruleCount: 1 },
+      { policy: 'direct', name: 'DNS', ruleCount: 1 },
+    ],
+  )
+})
+
+test('custom rule conflict report groups same type and value across sources', () => {
+  const report = buildCustomRuleConflictReportForTesting([
+    { raw: 'DOMAIN-SUFFIX,example.com', source: 'LuFei 自定义代理' },
+    { raw: 'DOMAIN-SUFFIX,example.com,DIRECT', source: 'OpenClash 前置自定义' },
+    { raw: 'DOMAIN,api.example.com', source: 'LuFei 自定义直连' },
+  ])
+
+  assert.equal(report.count, 1)
+  assert.equal(report.conflicts[0].type, 'DOMAIN-SUFFIX')
+  assert.equal(report.conflicts[0].value, 'example.com')
+  assert.deepEqual(
+    report.conflicts[0].sources.map((source) => source.source),
+    ['LuFei 自定义代理', 'OpenClash 前置自定义'],
+  )
+})
+
+test('custom rule status finds the policy for generated rule target', () => {
+  assert.deepEqual(
+    getCustomRuleStatusForTesting({
+      target: 'https://www.example.com/path',
+      kind: 'domain_suffix',
+      entries: [
+        { rule: 'DOMAIN-SUFFIX,www.example.com', policy: 'direct' },
+      ],
+    }),
+    {
+      found: true,
+      rule: 'DOMAIN-SUFFIX,www.example.com',
+      policy: 'direct',
+      conflicts: [],
+    },
+  )
+})
+
+test('lufei diagnostics reports storage, custom rules and conflicts', () => {
+  const diagnostics = buildLufeiDiagnosticsForTesting({
+    dataDir: tempDir,
+    entries: [
+      { rule: 'DOMAIN-SUFFIX,example.com', policy: 'proxy' },
+      { rule: 'DOMAIN-SUFFIX,example.cn', policy: 'direct' },
+    ],
+    settings: {
+      providerName: 'LuFei / Custom',
+      directProviderName: 'LuFei / Custom Direct',
+      policyGroup: '自定义-代理',
+      directPolicyGroup: '自定义-直连',
+    },
+    sshConfig: { configured: false },
+    conflictReport: { count: 1, conflicts: [] },
+  })
+
+  assert.equal(diagnostics.ok, false)
+  assert.equal(diagnostics.checks.find((item) => item.key === 'storage').status, 'ok')
+  assert.match(diagnostics.checks.find((item) => item.key === 'customRules').message, /代理 1 条，直连 1 条/)
+  assert.equal(diagnostics.checks.find((item) => item.key === 'ssh').status, 'warning')
+  assert.equal(diagnostics.checks.find((item) => item.key === 'conflicts').status, 'warning')
 })

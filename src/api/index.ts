@@ -542,6 +542,40 @@ export type CustomRulesPayload = {
   }
 }
 
+export type CustomRuleGroup = {
+  name: string
+  policy: CustomRulePolicy
+  ruleCount: number
+  rules: CustomRuleEntry[]
+}
+
+export type CustomRuleConflict = {
+  key: string
+  type: string
+  value: string
+  sources: Array<{
+    raw: string
+    source: string
+  }>
+}
+
+export type CustomRuleConflictPayload = {
+  count: number
+  conflicts: CustomRuleConflict[]
+  warning?: string
+}
+
+export type LufeiDiagnosticsPayload = {
+  ok: boolean
+  conflictWarning?: string
+  checks: Array<{
+    key: string
+    label: string
+    status: 'ok' | 'warning' | 'error'
+    message: string
+  }>
+}
+
 export type ApplyCustomRuleYamlResult = {
   ok: boolean
   plugin: string
@@ -578,6 +612,51 @@ export const fetchCustomRulesAPI = async () => {
   }
 
   return (await response.json()) as CustomRulesPayload
+}
+
+export const fetchCustomRuleGroupsAPI = async () => {
+  const response = await fetchServerApi('/api/custom-rules/groups', {
+    headers: {
+      Accept: 'application/json',
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch custom rule groups: ${response.status}`)
+  }
+
+  return (await response.json()) as { groups: CustomRuleGroup[] }
+}
+
+export const fetchCustomRuleConflictsAPI = async () => {
+  const response = await fetchServerApi('/api/custom-rules/conflicts', {
+    headers: {
+      Accept: 'application/json',
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch custom rule conflicts: ${response.status}`)
+  }
+
+  return (await response.json()) as CustomRuleConflictPayload
+}
+
+export const fetchLufeiDiagnosticsAPI = async () => {
+  const response = await fetchServerApi('/api/lufei-clashboard/diagnostics', {
+    headers: {
+      Accept: 'application/json',
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Lufei diagnostics: ${response.status}`)
+  }
+
+  return (await response.json()) as LufeiDiagnosticsPayload
 }
 
 export const addCustomRuleAPI = async (

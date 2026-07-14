@@ -133,6 +133,41 @@
           </div>
         </div>
 
+        <div class="rule-state">
+          <div class="field-heading">
+            <span class="label">当前规则状态</span>
+            <button
+              id="refresh-status"
+              type="button"
+              class="inline-button"
+            >
+              刷新状态
+            </button>
+          </div>
+          <div
+            id="rule-status"
+            class="rule-status"
+          >
+            正在读取...
+          </div>
+          <div class="actions compact-actions">
+            <button
+              id="switch-policy"
+              type="button"
+              class="button button-ghost"
+            >
+              切换策略
+            </button>
+            <button
+              id="delete-rule"
+              type="button"
+              class="button button-ghost"
+            >
+              删除规则
+            </button>
+          </div>
+        </div>
+
         <button
           id="add"
           type="button"

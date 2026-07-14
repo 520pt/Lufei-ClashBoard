@@ -3944,6 +3944,191 @@ const rejectProxyDomainRuleConflict = (rule, candidates = []) => {
   })
 }
 
+const parseCustomRuleGroups = (entries = []) => {
+  const groups = []
+  const currentGroupByPolicy = new Map()
+
+  const ensureGroup = (policy, name) => {
+    const normalizedPolicy = normalizeCustomRulePolicy(policy)
+    const groupName = String(name || '未分组').trim() || '未分组'
+    const key = `${normalizedPolicy}\n${groupName}`
+    const currentGroup = currentGroupByPolicy.get(normalizedPolicy)
+
+    if (currentGroup?.key === key) {
+      return currentGroup.group
+    }
+
+    const group = {
+      name: groupName,
+      policy: normalizedPolicy,
+      ruleCount: 0,
+      rules: [],
+    }
+
+    currentGroupByPolicy.set(normalizedPolicy, { key, group })
+    groups.push(group)
+
+    return group
+  }
+
+  entries.forEach((entry) => {
+    const rule = String(entry?.rule || '').trim()
+    const policy = normalizeCustomRulePolicy(entry?.policy)
+
+    if (!rule) return
+
+    if (isCustomRuleComment(rule)) {
+      ensureGroup(policy, rule.replace(/^#+\s*/, '') || '未分组')
+      return
+    }
+
+    const group = currentGroupByPolicy.get(policy)?.group || ensureGroup(policy, '未分组')
+
+    group.rules.push({
+      rule,
+      policy,
+    })
+    group.ruleCount += 1
+  })
+
+  return groups
+}
+
+const buildCustomRuleConflictReport = (candidates = []) => {
+  const grouped = new Map()
+
+  candidates
+    .map((candidate) => normalizeProxyDomainConflictCandidate(candidate))
+    .forEach((candidate) => {
+      const key = getProxyDomainRuleMatchKey(candidate.raw)
+
+      if (!key) return
+
+      const [type, value] = key.split('\n')
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          key,
+          type,
+          value,
+          sources: [],
+        })
+      }
+
+      grouped.get(key).sources.push(candidate)
+    })
+
+  const conflicts = [...grouped.values()]
+    .filter((item) => new Set(item.sources.map((source) => source.source)).size > 1)
+    .sort((prev, next) => prev.key.localeCompare(next.key))
+
+  return {
+    count: conflicts.length,
+    conflicts,
+  }
+}
+
+const getCustomRuleStatus = ({ target, kind = 'auto', entries = readCustomRuleEntries() }) => {
+  const rule = makeCustomRule(target, kind)
+  const targetKey = getProxyDomainRuleMatchKey(rule)
+  const conflicts = []
+  let matchedEntry = null
+
+  entries.forEach((entry) => {
+    if (!entry?.rule || isCustomRuleComment(entry.rule)) return
+
+    const sameRule = entry.rule === rule
+    const sameMatchKey = targetKey && getProxyDomainRuleMatchKey(entry.rule) === targetKey
+
+    if (!sameRule && !sameMatchKey) return
+
+    const normalizedPolicy = normalizeCustomRulePolicy(entry.policy)
+    const item = {
+      rule: entry.rule,
+      policy: normalizedPolicy,
+    }
+
+    if (!matchedEntry) {
+      matchedEntry = item
+    } else {
+      conflicts.push(item)
+    }
+  })
+
+  return {
+    found: Boolean(matchedEntry),
+    rule: matchedEntry?.rule || rule,
+    policy: matchedEntry?.policy || null,
+    conflicts,
+  }
+}
+
+const buildLufeiDiagnostics = ({
+  dataDir: targetDataDir = dataDir,
+  entries = readCustomRuleEntries(),
+  settings = readCustomRulesSettings(),
+  sshConfig = readOpenWrtRuleSourceSshConfig(),
+  conflictReport = { count: 0, conflicts: [] },
+} = {}) => {
+  const proxyRuleCount = entries.filter(
+    (entry) => normalizeCustomRulePolicy(entry.policy) === CUSTOM_RULE_POLICY_PROXY && !isCustomRuleComment(entry.rule),
+  ).length
+  const directRuleCount = entries.filter(
+    (entry) => normalizeCustomRulePolicy(entry.policy) === CUSTOM_RULE_POLICY_DIRECT && !isCustomRuleComment(entry.rule),
+  ).length
+  const storageOk = fs.existsSync(targetDataDir)
+  const checks = [
+    {
+      key: 'storage',
+      label: '持久化数据目录',
+      status: storageOk ? 'ok' : 'error',
+      message: storageOk ? `数据目录可访问：${targetDataDir}` : `数据目录不存在：${targetDataDir}`,
+    },
+    {
+      key: 'customRules',
+      label: '自定义规则',
+      status: proxyRuleCount + directRuleCount > 0 ? 'ok' : 'warning',
+      message: `代理 ${proxyRuleCount} 条，直连 ${directRuleCount} 条`,
+    },
+    {
+      key: 'ssh',
+      label: '规则源 SSH',
+      status: sshConfig?.configured ? 'ok' : 'warning',
+      message: sshConfig?.configured
+        ? `已配置 OpenWrt：${sshConfig.host || '-'}`
+        : '尚未配置规则源 SSH，一键写入 YAML 和跨源检测不可用',
+    },
+    {
+      key: 'yaml',
+      label: 'LuFei YAML 写入',
+      status:
+        settings?.providerName &&
+        settings?.directProviderName &&
+        settings?.policyGroup &&
+        settings?.directPolicyGroup
+          ? 'ok'
+          : 'warning',
+      message: `规则源：${settings?.providerName || '-'} / ${
+        settings?.directProviderName || '-'
+      }；策略组：${settings?.policyGroup || '-'} / ${settings?.directPolicyGroup || '-'}`,
+    },
+    {
+      key: 'conflicts',
+      label: '规则冲突',
+      status: conflictReport.count > 0 ? 'warning' : 'ok',
+      message:
+        conflictReport.count > 0
+          ? `发现 ${conflictReport.count} 组同域名/IP 冲突`
+          : '未发现同域名/IP 冲突',
+    },
+  ]
+
+  return {
+    ok: checks.every((item) => item.status === 'ok'),
+    checks,
+  }
+}
+
 const getYamlRuleItemParts = (item) =>
   getYamlRuleItemValue(item)
     .split(',')
@@ -7673,12 +7858,109 @@ app.get('/api/custom-rules', async (req, res) => {
   }
 })
 
+app.get('/api/custom-rules/groups', async (_req, res) => {
+  try {
+    await restoreCustomRulesIfMissing()
+
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      groups: parseCustomRuleGroups(readCustomRuleEntries()),
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: getErrorMessage(error),
+    })
+  }
+})
+
+app.get('/api/custom-rules/conflicts', async (_req, res) => {
+  try {
+    await restoreCustomRulesIfMissing()
+
+    let warning = ''
+    let remoteCandidates = []
+
+    try {
+      remoteCandidates = await readProxyDomainCustomRuleConflictCandidatesFromOpenWrt()
+    } catch (error) {
+      warning = getErrorMessage(error)
+    }
+
+    const report = buildCustomRuleConflictReport([
+      ...getLocalCustomRuleConflictCandidates(),
+      ...remoteCandidates,
+    ])
+
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      ...report,
+      warning,
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: getErrorMessage(error),
+    })
+  }
+})
+
+app.get('/api/custom-rules/status', async (req, res) => {
+  try {
+    await restoreCustomRulesIfMissing()
+
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(
+      getCustomRuleStatus({
+        target: req.query.target,
+        kind: req.query.kind || 'auto',
+      }),
+    )
+  } catch (error) {
+    res.status(getErrorStatusCode(error, 400)).json({
+      message: getErrorMessage(error),
+    })
+  }
+})
+
 app.get('/api/lufei-clashboard/ping', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.json({
     app: 'Lufei-ClashBoard',
     ok: true,
   })
+})
+
+app.get('/api/lufei-clashboard/diagnostics', async (_req, res) => {
+  try {
+    await restoreCustomRulesIfMissing()
+
+    let conflictReport = { count: 0, conflicts: [] }
+    let conflictWarning = ''
+
+    try {
+      const remoteCandidates = await readProxyDomainCustomRuleConflictCandidatesFromOpenWrt()
+
+      conflictReport = buildCustomRuleConflictReport([
+        ...getLocalCustomRuleConflictCandidates(),
+        ...remoteCandidates,
+      ])
+    } catch (error) {
+      conflictWarning = getErrorMessage(error)
+    }
+
+    const diagnostics = buildLufeiDiagnostics({
+      conflictReport,
+    })
+
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      ...diagnostics,
+      conflictWarning,
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: getErrorMessage(error),
+    })
+  }
 })
 
 app.post('/api/custom-rules', async (req, res) => {
@@ -7753,11 +8035,15 @@ app.put('/api/custom-rules', async (req, res) => {
 app.delete('/api/custom-rules', async (req, res) => {
   try {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
-    const result = deleteCustomRule(req.body?.rule, req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
+    const policy = req.body?.policy || CUSTOM_RULE_POLICY_PROXY
+    const result = deleteCustomRule(req.body?.rule, policy)
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
     const backup = await syncCustomRulesBackupToOpenWrt('after-delete', result.rules)
+    const refresh = result.removed
+      ? await startCustomRuleProviderRefresh(normalizeCustomRulePolicy(policy))
+      : null
 
-    res.json({ ...result, cacheSync, backup })
+    res.json({ ...result, cacheSync, backup, refresh })
   } catch (error) {
     res.status(500).json({
       message: getErrorMessage(error),
@@ -7962,7 +8248,9 @@ export {
   addProxyDomainRuleToYamlContent as addProxyDomainRuleToYamlContentForTesting,
   app,
   applyCustomRuleProviderToYamlContent as applyCustomRuleProviderToYamlContentForTesting,
+  buildCustomRuleConflictReport as buildCustomRuleConflictReportForTesting,
   buildCustomRuleSnippets,
+  buildLufeiDiagnostics as buildLufeiDiagnosticsForTesting,
   buildPublicCustomRuleUrl as buildPublicCustomRuleUrlForTesting,
   CLASH_CONTROLLER_DISCOVERY_PORTS as clashControllerDiscoveryPortsForTesting,
   createAccessSessionToken as createAccessSessionTokenForTesting,
@@ -7978,6 +8266,7 @@ export {
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
   getOpenClashRuntimeConfigPath as getOpenClashRuntimeConfigPathForTesting,
+  getCustomRuleStatus as getCustomRuleStatusForTesting,
   getProxyDomainRuleConflict as getProxyDomainRuleConflictForTesting,
   getProxyGroupRulePenetrationCacheEntry as getProxyGroupRulePenetrationCacheEntryForTesting,
   getRemoteYamlBackupCleanupCommand as getRemoteYamlBackupCleanupCommandForTesting,
@@ -7987,6 +8276,7 @@ export {
   isLikelyClashControllerResult as isLikelyClashControllerResultForTesting,
   makeCustomRule,
   normalizeWritableProxyDomainRuleInput as normalizeWritableProxyDomainRuleInputForTesting,
+  parseCustomRuleGroups as parseCustomRuleGroupsForTesting,
   parseProxyDomainCustomRulesFromYamlContent as parseProxyDomainCustomRulesFromYamlContentForTesting,
   rejectProxyDomainRuleConflict as rejectProxyDomainRuleConflictForTesting,
   readCustomRuleListText,
