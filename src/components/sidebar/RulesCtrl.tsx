@@ -21,8 +21,14 @@ import {
   disconnectOnRuleDisable,
   displayLatencyInRule,
   displayNowNodeInRule,
+  useRuleGridMode,
 } from '@/store/settings'
-import { ArrowPathIcon, WrenchScrewdriverIcon } from '@heroicons/vue/24/outline'
+import {
+  ArrowPathIcon,
+  ListBulletIcon,
+  Squares2X2Icon,
+  WrenchScrewdriverIcon,
+} from '@heroicons/vue/24/outline'
 import { computed, defineComponent, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DialogWrapper from '../common/DialogWrapper.vue'
@@ -226,6 +232,20 @@ export default defineComponent({
         </>
       )
 
+      const displayModeButton = (
+        <button
+          class="btn btn-circle btn-sm"
+          title={useRuleGridMode.value ? '切换到列表模式' : '切换到网格模式'}
+          onClick={() => (useRuleGridMode.value = !useRuleGridMode.value)}
+        >
+          {useRuleGridMode.value ? (
+            <ListBulletIcon class="h-4 w-4" />
+          ) : (
+            <Squares2X2Icon class="h-4 w-4" />
+          )}
+        </button>
+      )
+
       const content = !isLargeCtrlsBar.value ? (
         <div class="app-card-padding flex flex-col gap-2">
           {showRuleTabs.value && (
@@ -248,6 +268,7 @@ export default defineComponent({
                     />
                   </button>
                 )}
+                {displayModeButton}
                 {settingsModal}
               </div>
             </div>
@@ -269,6 +290,7 @@ export default defineComponent({
           {searchInput}
           <div class="flex-1"></div>
           {upgradeAllIcon}
+          {displayModeButton}
           {settingsModal}
         </div>
       )

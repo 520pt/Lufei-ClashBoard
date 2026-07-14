@@ -284,6 +284,7 @@ export const sourceIPLabelList = useStorage<SourceIPLabel[]>('config/source-ip-l
 export const displayNowNodeInRule = useStorage('config/display-now-node-in-rule', true)
 export const displayLatencyInRule = useStorage('config/display-latency-in-rule', true)
 export const disconnectOnRuleDisable = useStorage('config/disconnect-on-rule-disable', true)
+export const useRuleGridMode = useStorage('config/use-rule-grid-mode', false)
 
 // logs
 export const logRetentionLimit = useStorage<number>('config/log-retention-limit', 1000)

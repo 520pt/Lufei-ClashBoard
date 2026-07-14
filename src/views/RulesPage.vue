@@ -75,20 +75,24 @@
             </template>
           </template>
           <template v-else-if="rulesTabShow === RULE_TAB_TYPE.PROVIDER">
-            <RuleProvider
-              v-for="(ruleProvider, index) in renderRulesProvider"
-              :key="ruleProvider.name"
-              :ruleProvider="ruleProvider"
-              :index="index + 1"
-            />
+            <div :class="ruleDisplayContainerClass">
+              <RuleProvider
+                v-for="(ruleProvider, index) in renderRulesProvider"
+                :key="ruleProvider.name"
+                :ruleProvider="ruleProvider"
+                :index="index + 1"
+              />
+            </div>
           </template>
           <template v-else>
-            <RuleCard
-              v-for="rule in renderRules"
-              :key="`${rule.type}-${rule.payload}-${rule.proxy}`"
-              :rule="rule"
-              :index="rules.indexOf(rule) + 1"
-            />
+            <div :class="ruleDisplayContainerClass">
+              <RuleCard
+                v-for="rule in renderRules"
+                :key="`${rule.type}-${rule.payload}-${rule.proxy}`"
+                :rule="rule"
+                :index="rules.indexOf(rule) + 1"
+              />
+            </div>
           </template>
         </div>
       </div>
@@ -158,6 +162,7 @@ import {
   searchRuleByQuery,
   updateRuleProviderCache,
 } from '@/store/rules'
+import { useRuleGridMode } from '@/store/settings'
 import type { Rule } from '@/types'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -310,11 +315,17 @@ const { padding } = usePaddingForViews({
   offsetTop: 0,
   offsetBottom: 8,
 })
+const ruleDisplayContainerClass = computed(() =>
+  useRuleGridMode.value
+    ? 'grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(24rem,100%),1fr))]'
+    : 'flex flex-col gap-3',
+)
 
 const isVirtualScroller = computed(() => {
   return (
     rulesTabShow.value === RULE_TAB_TYPE.RULES &&
     !isRuleLookupQuery.value &&
+    !useRuleGridMode.value &&
     renderRules.value.length > 200
   )
 })
