@@ -37,6 +37,7 @@ const {
   getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnetForTesting,
   getOpenClashRuntimeConfigPathForTesting,
+  getProxyDomainRuleConflictForTesting,
   getProxyGroupRulePenetrationCacheEntryForTesting,
   getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPathForTesting,
@@ -45,6 +46,7 @@ const {
   makeCustomRule,
   normalizeWritableProxyDomainRuleInputForTesting,
   parseProxyDomainCustomRulesFromYamlContentForTesting,
+  rejectProxyDomainRuleConflictForTesting,
   readCustomRuleListText,
   readCustomRules,
   readCustomRulesSettings,
@@ -954,6 +956,29 @@ DOMAIN-SUFFIX,bookmarkearth.com`
   assert.ok(!listLines.some((line) => line.includes('\n')))
 })
 
+test('custom rules manager skips cross-source conflicting rules', () => {
+  replaceSnapshot({})
+
+  const result = addCustomRules({
+    targets: `DOMAIN-SUFFIX,conflict.example
+DOMAIN-SUFFIX,unique-conflict-test.example`,
+    policy: 'proxy',
+    conflictCandidates: [
+      {
+        raw: 'DOMAIN-SUFFIX,conflict.example,DIRECT',
+        source: 'OpenClash 前置自定义',
+      },
+    ],
+  })
+
+  assert.equal(result.addedCount, 1)
+  assert.equal(result.conflictCount, 1)
+  assert.equal(result.results[0].added, false)
+  assert.equal(result.results[0].conflict, true)
+  assert.equal(result.results[0].conflictSource, 'OpenClash 前置自定义')
+  assert.equal(result.results[1].added, true)
+})
+
 test('custom rule providers are synced to local rule cache', async () => {
   replaceSnapshot({})
   addCustomRule({ target: 'example-cache.com', policy: 'proxy' })
@@ -1561,4 +1586,50 @@ test('proxy domain rule duplicate does not rewrite YAML', () => {
   assert.equal(result.changed, false)
   assert.equal(result.duplicated, true)
   assert.equal(result.content, content)
+})
+
+test('proxy domain rule conflict ignores source but matches type and value', () => {
+  const conflict = getProxyDomainRuleConflictForTesting(
+    'DOMAIN-SUFFIX,example.com,自定义-代理',
+    [
+      {
+        raw: 'DOMAIN-SUFFIX,example.com,DIRECT',
+        source: 'OpenClash 前置自定义',
+      },
+    ],
+  )
+
+  assert.deepEqual(conflict, {
+    raw: 'DOMAIN-SUFFIX,example.com,DIRECT',
+    source: 'OpenClash 前置自定义',
+  })
+
+  assert.equal(
+    getProxyDomainRuleConflictForTesting('DOMAIN-SUFFIX,other.example,自定义-代理', [
+      {
+        raw: 'DOMAIN-SUFFIX,example.com,DIRECT',
+        source: 'OpenClash 前置自定义',
+      },
+    ]),
+    null,
+  )
+})
+
+test('proxy domain rule conflict is rejected with source details', () => {
+  assert.throws(
+    () =>
+      rejectProxyDomainRuleConflictForTesting('IP-CIDR,10.0.0.1/32,自定义-直连', [
+        {
+          raw: 'IP-CIDR,10.0.0.1/32,DIRECT',
+          source: 'LuFei 自定义直连',
+        },
+      ]),
+    (error) => {
+      assert.equal(error.statusCode, 409)
+      assert.match(error.message, /规则冲突/)
+      assert.match(error.message, /LuFei 自定义直连/)
+      assert.match(error.message, /IP-CIDR,10.0.0.1\/32,DIRECT/)
+      return true
+    },
+  )
 })

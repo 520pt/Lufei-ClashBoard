@@ -1751,7 +1751,12 @@ const isCompleteCustomRuleLine = (value) => {
   return /^[A-Z][A-Z0-9-]*\s*,/.test(String(value || '').trim())
 }
 
-const addCustomRules = ({ targets, kind = 'auto', policy = CUSTOM_RULE_POLICY_PROXY }) => {
+const addCustomRules = ({
+  targets,
+  kind = 'auto',
+  policy = CUSTOM_RULE_POLICY_PROXY,
+  conflictCandidates = [],
+}) => {
   const normalizedPolicy = normalizeCustomRulePolicy(policy)
   const inputTargets = splitCustomRuleTargets(targets, kind)
 
@@ -1768,6 +1773,21 @@ const addCustomRules = ({ targets, kind = 'auto', policy = CUSTOM_RULE_POLICY_PR
   inputTargets.forEach((target) => {
     try {
       const rule = makeCustomRule(target, isCompleteCustomRuleLine(target) ? 'raw' : kind)
+      const conflict = getProxyDomainRuleConflict(rule, conflictCandidates)
+
+      if (conflict) {
+        results.push({
+          target,
+          rule,
+          policy: normalizedPolicy,
+          added: false,
+          conflict: true,
+          conflictRule: conflict.raw,
+          conflictSource: conflict.source,
+        })
+        return
+      }
+
       const key = `${normalizedPolicy}\n${rule}`
       const added = !existingRuleKeys.has(key)
 
@@ -1801,6 +1821,7 @@ const addCustomRules = ({ targets, kind = 'auto', policy = CUSTOM_RULE_POLICY_PR
       errors,
       addedCount: results.filter((item) => item.added).length,
       skippedCount: results.filter((item) => !item.added).length,
+      conflictCount: results.filter((item) => item.conflict).length,
       errorCount: errors.length,
       rules: writtenRules,
     }
@@ -1812,15 +1833,28 @@ const addCustomRules = ({ targets, kind = 'auto', policy = CUSTOM_RULE_POLICY_PR
     errors,
     addedCount: 0,
     skippedCount: results.length,
+    conflictCount: results.filter((item) => item.conflict).length,
     errorCount: errors.length,
     rules,
   }
 }
 
-const replaceCustomRulesText = ({ text, policy = CUSTOM_RULE_POLICY_PROXY }) => {
+const replaceCustomRulesText = ({
+  text,
+  policy = CUSTOM_RULE_POLICY_PROXY,
+  conflictCandidates = [],
+}) => {
   const normalizedPolicy = normalizeCustomRulePolicy(policy)
   const rules = readCustomRuleEntries()
   const nextPolicyEntries = customRuleTextToEntries(text, normalizedPolicy)
+  const conflictEntry = nextPolicyEntries.find((entry) =>
+    getProxyDomainRuleConflict(entry.rule, conflictCandidates),
+  )
+
+  if (conflictEntry) {
+    rejectProxyDomainRuleConflict(conflictEntry.rule, conflictCandidates)
+  }
+
   const nextRules = [
     ...rules.filter((entry) => entry.policy !== normalizedPolicy),
     ...nextPolicyEntries,
@@ -3607,6 +3641,15 @@ const createBadRequestError = (message) => {
   return error
 }
 
+const createRuleConflictError = (message, conflict = null) => {
+  const error = new Error(message)
+  error.statusCode = 409
+  if (conflict) {
+    error.conflict = conflict
+  }
+  return error
+}
+
 const getErrorStatusCode = (error, fallback = 500) => {
   const statusCode =
     error && typeof error === 'object' && Number.isInteger(error.statusCode)
@@ -3834,6 +3877,71 @@ const getComparableProxyDomainRule = (value) => {
   } catch {
     return ''
   }
+}
+
+const getProxyDomainRuleMatchKey = (value) => {
+  const parts = String(value || '')
+    .split(',')
+    .map((part) => part.trim())
+
+  const type = normalizeRuleTypeName(parts[0])
+
+  if (!PROXY_DIRECT_RULE_TYPES.has(type) || !parts[1]) {
+    return ''
+  }
+
+  try {
+    return [type, normalizeProxyDirectRuleValue(parts[1], type)].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+const normalizeProxyDomainConflictCandidate = (candidate) => {
+  if (typeof candidate === 'string') {
+    return {
+      raw: candidate.trim(),
+      source: '',
+    }
+  }
+
+  return {
+    raw: String(candidate?.raw || candidate?.rule || '').trim(),
+    source: String(candidate?.source || '').trim(),
+  }
+}
+
+const getProxyDomainRuleConflict = (rule, candidates = []) => {
+  const targetKey = getProxyDomainRuleMatchKey(rule)
+
+  if (!targetKey) {
+    return null
+  }
+
+  const conflict = candidates
+    .map((candidate) => normalizeProxyDomainConflictCandidate(candidate))
+    .find((candidate) => candidate.raw && getProxyDomainRuleMatchKey(candidate.raw) === targetKey)
+
+  return conflict || null
+}
+
+const formatProxyDomainRuleConflictMessage = (rule, conflict) => {
+  const source = conflict?.source ? `（${conflict.source}）` : ''
+
+  return `规则冲突：${rule} 已在其他自定义规则${source}中存在：${conflict?.raw || ''}。请先删除旧规则后再添加，避免同一域名/IP 被不同规则优先级覆盖。`
+}
+
+const rejectProxyDomainRuleConflict = (rule, candidates = []) => {
+  const conflict = getProxyDomainRuleConflict(rule, candidates)
+
+  if (!conflict) {
+    return null
+  }
+
+  throw createRuleConflictError(formatProxyDomainRuleConflictMessage(rule, conflict), {
+    rule,
+    ...conflict,
+  })
 }
 
 const getYamlRuleItemParts = (item) =>
@@ -4398,6 +4506,19 @@ const addProxyDomainRuleToRemoteConfig = async (input = {}) => {
         : plainText
           ? ''
           : 'rules:\n'
+      const conflictCandidates = [
+        ...getLocalCustomRuleConflictCandidates(),
+        ...(snapshot.plugin === 'openclash'
+          ? await readProxyDomainCustomRuleConflictCandidatesFromOpenWrtClient(
+              client,
+              snapshot,
+              { excludePaths: [configPath] },
+            )
+          : []),
+      ]
+
+      rejectProxyDomainRuleConflict(normalizedInput.rule, conflictCandidates)
+
       const result = addProxyDomainRuleToYamlContent(content, normalizedInput, { plainText })
 
       if (result.changed) {
@@ -4419,7 +4540,7 @@ const addProxyDomainRuleToRemoteConfig = async (input = {}) => {
       }
     })
   } catch (error) {
-    if (getErrorStatusCode(error, 0) === 400) {
+    if ([400, 409].includes(getErrorStatusCode(error, 0))) {
       throw error
     }
 
@@ -4451,6 +4572,19 @@ const updateProxyDomainRuleOnOpenWrt = async (input = {}) => {
       )
       const plainText = snapshot.plugin === 'openclash'
       const content = await readRemoteFile(client, configPath)
+      const conflictCandidates = [
+        ...getLocalCustomRuleConflictCandidates(),
+        ...(snapshot.plugin === 'openclash'
+          ? await readProxyDomainCustomRuleConflictCandidatesFromOpenWrtClient(
+              client,
+              snapshot,
+              { excludePaths: [configPath] },
+            )
+          : []),
+      ]
+
+      rejectProxyDomainRuleConflict(normalizedInput.rule, conflictCandidates)
+
       const result = updateProxyDomainRuleInYamlContent(content, originalRule, normalizedInput, {
         plainText,
       })
@@ -4471,7 +4605,7 @@ const updateProxyDomainRuleOnOpenWrt = async (input = {}) => {
       }
     })
   } catch (error) {
-    if (getErrorStatusCode(error, 0) === 400) {
+    if ([400, 409].includes(getErrorStatusCode(error, 0))) {
       throw error
     }
 
@@ -4789,6 +4923,86 @@ const readProxyDomainCustomRulesOnOpenWrt = async (customGroupMode) => {
     }
 
     throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
+}
+
+const getLocalCustomRuleConflictCandidates = (entries = readCustomRuleEntries()) =>
+  entries
+    .filter((entry) => entry?.rule && !isCustomRuleComment(entry.rule))
+    .map((entry) => ({
+      raw: entry.rule,
+      source:
+        normalizeCustomRulePolicy(entry.policy) === CUSTOM_RULE_POLICY_DIRECT
+          ? 'LuFei 自定义直连'
+          : 'LuFei 自定义代理',
+    }))
+
+const getRuleSourceDisplayName = (plugin) => {
+  const normalizedPlugin = String(plugin || '').trim().toLowerCase()
+
+  if (normalizedPlugin === 'nikki') {
+    return 'Nikki'
+  }
+
+  return 'OpenClash'
+}
+
+const getCustomGroupModeDisplayName = (mode) => (mode === 'post' ? '后置自定义' : '前置自定义')
+
+const readProxyDomainCustomRuleConflictCandidatesFromOpenWrtClient = async (
+  client,
+  snapshot,
+  options = {},
+) => {
+  const excludePaths = new Set((options.excludePaths || []).map((item) => String(item || '')))
+  const plainText = snapshot.plugin === 'openclash'
+  const candidates = []
+
+  for (const mode of ['pre', 'post']) {
+    const configPath = getWritableProxyDomainRulePath(snapshot, mode)
+
+    if (excludePaths.has(configPath)) {
+      continue
+    }
+
+    const content = (await remoteFileExists(client, configPath))
+      ? await readRemoteFile(client, configPath)
+      : plainText
+        ? ''
+        : 'rules:\n'
+    const source = `${getRuleSourceDisplayName(snapshot.plugin)} ${getCustomGroupModeDisplayName(mode)}`
+    const items = parseProxyDomainCustomRulesFromYamlContent(content, mode, {
+      plainText,
+      source,
+      standalone: snapshot.plugin === 'openclash',
+    })
+
+    items.forEach((item) => {
+      candidates.push({
+        raw: item.raw,
+        source,
+      })
+    })
+  }
+
+  return candidates
+}
+
+const readProxyDomainCustomRuleConflictCandidatesFromOpenWrt = async () => {
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    return []
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+
+      return readProxyDomainCustomRuleConflictCandidatesFromOpenWrtClient(client, snapshot)
+    })
+  } catch (error) {
+    throw createRuleSourceSshRequiredError(`跨源冲突检测失败：${getErrorMessage(error)}`)
   }
 }
 
@@ -7472,19 +7686,33 @@ app.post('/api/custom-rules', async (req, res) => {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const isBatchRequest =
       Array.isArray(req.body?.targets) || String(req.body?.target || '').includes('\n')
+    const conflictCandidates =
+      await readProxyDomainCustomRuleConflictCandidatesFromOpenWrt()
     const result = addCustomRules({
       targets: Array.isArray(req.body?.targets) ? req.body.targets : req.body?.target,
       kind: req.body?.kind || 'auto',
       policy: req.body?.policy || CUSTOM_RULE_POLICY_PROXY,
+      conflictCandidates,
     })
 
     if (result.results.length === 0 && result.errors.length > 0) {
       throw new Error(result.errors[0].message)
     }
 
-    const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
-    const backup = await syncCustomRulesBackupToOpenWrt('after-add', result.rules)
-    const refresh = await startCustomRuleProviderRefresh(result.policy)
+    if (!isBatchRequest && result.results.length === 1 && result.results[0].conflict) {
+      throw createRuleConflictError(
+        formatProxyDomainRuleConflictMessage(result.results[0].rule, {
+          raw: result.results[0].conflictRule,
+          source: result.results[0].conflictSource,
+        }),
+      )
+    }
+
+    const cacheSync =
+      result.addedCount > 0 ? syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl }) : null
+    const backup =
+      result.addedCount > 0 ? await syncCustomRulesBackupToOpenWrt('after-add', result.rules) : null
+    const refresh = result.addedCount > 0 ? await startCustomRuleProviderRefresh(result.policy) : null
 
     if (!isBatchRequest && result.results.length === 1) {
       res.json({ ...result.results[0], rules: result.rules, cacheSync, backup, refresh })
@@ -7493,7 +7721,7 @@ app.post('/api/custom-rules', async (req, res) => {
 
     res.json({ ...result, cacheSync, backup, refresh })
   } catch (error) {
-    res.status(400).json({
+    res.status(getErrorStatusCode(error, 400)).json({
       message: getErrorMessage(error),
     })
   }
@@ -7503,9 +7731,12 @@ app.put('/api/custom-rules', async (req, res) => {
   try {
     const { ruleUrl, directRuleUrl } = await getCustomRulePublicUrlsFromRequest(req)
     const policy = normalizeCustomRulePolicy(req.body?.policy || CUSTOM_RULE_POLICY_PROXY)
+    const conflictCandidates =
+      await readProxyDomainCustomRuleConflictCandidatesFromOpenWrt()
     const result = replaceCustomRulesText({
       text: req.body?.text,
       policy,
+      conflictCandidates,
     })
     const cacheSync = syncCustomRuleProvidersToCache({ ruleUrl, directRuleUrl })
     const backup = await syncCustomRulesBackupToOpenWrt('after-edit', result.rules)
@@ -7513,7 +7744,7 @@ app.put('/api/custom-rules', async (req, res) => {
 
     res.json({ ...result, cacheSync, backup, refresh })
   } catch (error) {
-    res.status(400).json({
+    res.status(getErrorStatusCode(error, 400)).json({
       message: getErrorMessage(error),
     })
   }
@@ -7747,6 +7978,7 @@ export {
   getOpenWrtLanScanTargets as getOpenWrtLanScanTargetsForTesting,
   getOpenWrtLanScanTargetsFromSubnet as getOpenWrtLanScanTargetsFromSubnetForTesting,
   getOpenClashRuntimeConfigPath as getOpenClashRuntimeConfigPathForTesting,
+  getProxyDomainRuleConflict as getProxyDomainRuleConflictForTesting,
   getProxyGroupRulePenetrationCacheEntry as getProxyGroupRulePenetrationCacheEntryForTesting,
   getRemoteYamlBackupCleanupCommand as getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPath as getRemoteYamlBackupPathForTesting,
@@ -7756,6 +7988,7 @@ export {
   makeCustomRule,
   normalizeWritableProxyDomainRuleInput as normalizeWritableProxyDomainRuleInputForTesting,
   parseProxyDomainCustomRulesFromYamlContent as parseProxyDomainCustomRulesFromYamlContentForTesting,
+  rejectProxyDomainRuleConflict as rejectProxyDomainRuleConflictForTesting,
   readCustomRuleListText,
   readCustomRules,
   readCustomRulesSettings,

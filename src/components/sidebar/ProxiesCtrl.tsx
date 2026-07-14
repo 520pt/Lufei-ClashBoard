@@ -686,7 +686,7 @@ export default defineComponent({
         console.error(error)
         showNotification({
           key: 'domainRuleAddFailed',
-          content: 'domainRuleAddFailed',
+          content: error instanceof Error ? error.message : 'domainRuleAddFailed',
           type: 'alert-error',
         })
       } finally {

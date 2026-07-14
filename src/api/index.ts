@@ -609,6 +609,9 @@ export const addCustomRuleAPI = async (
       rule: string
       policy: CustomRulePolicy
       added: boolean
+      conflict?: boolean
+      conflictRule?: string
+      conflictSource?: string
     }>
     errors?: Array<{
       target: string
@@ -616,6 +619,7 @@ export const addCustomRuleAPI = async (
     }>
     addedCount?: number
     skippedCount?: number
+    conflictCount?: number
     errorCount?: number
     rules: CustomRuleEntry[]
   }

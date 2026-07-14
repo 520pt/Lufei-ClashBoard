@@ -874,7 +874,7 @@ const submitEditRule = async () => {
     console.error(updateError)
     showNotification({
       key: 'custom-rule-update-failed',
-      content: 'customRuleUpdateFailed',
+      content: updateError instanceof Error ? updateError.message : 'customRuleUpdateFailed',
       type: 'alert-error',
     })
   } finally {

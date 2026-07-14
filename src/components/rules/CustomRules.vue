@@ -694,14 +694,18 @@ const handleAddRule = async () => {
     const firstResult = result.results?.[0]
     const addedCount = result.addedCount ?? (result.added ? 1 : 0)
     const skippedCount = result.skippedCount ?? (result.added === false ? 1 : 0)
+    const conflictCount =
+      result.conflictCount ?? result.results?.filter((item) => item.conflict).length ?? 0
     const errorCount = result.errorCount ?? 0
     const batchSummary = isBatchResult
       ? `新增 ${addedCount} 条，已存在 ${skippedCount} 条${
-          errorCount ? `，失败 ${errorCount} 条` : ''
-        }`
-      : result.added
-        ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule || firstResult?.rule || ''}`
-        : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule || firstResult?.rule || ''}`
+          conflictCount ? `，冲突 ${conflictCount} 条` : ''
+        }${errorCount ? `，失败 ${errorCount} 条` : ''}`
+      : firstResult?.conflict
+        ? `规则冲突：${firstResult.rule || ''} 已在 ${firstResult.conflictSource || '其他自定义规则'} 中存在`
+        : result.added
+          ? `已添加到${getPolicyLabel(selectedPolicy)}：${result.rule || firstResult?.rule || ''}`
+          : `${getPolicyLabel(selectedPolicy)}已存在：${result.rule || firstResult?.rule || ''}`
 
     showNotification({
       content: `${batchSummary}${getRefreshStatusText(refreshStatus)}`,
