@@ -7,6 +7,7 @@
         :style="padding"
       >
         <div class="flex flex-col gap-3 p-3">
+          <RuleDiagnosticsPanel />
           <template
             v-if="
               (rulesTabShow === RULE_TAB_TYPE.RULES || rulesTabShow === RULE_TAB_TYPE.PROVIDER) &&
@@ -92,21 +93,28 @@
         </div>
       </div>
     </template>
-    <VirtualScroller
+    <div
       v-else
-      class="min-h-0 flex-1"
-      :style="virtualScrollerStyle"
-      :data="renderRules"
-      :size="84"
+      class="flex min-h-0 flex-1 flex-col overflow-hidden"
+      :style="padding"
     >
-      <template #default="{ item: rule }: { item: Rule }">
-        <RuleCard
-          :key="`${rule.type}-${rule.payload}-${rule.proxy}`"
-          :rule="rule"
-          :index="rules.indexOf(rule) + 1"
-        />
-      </template>
-    </VirtualScroller>
+      <div class="shrink-0 p-3">
+        <RuleDiagnosticsPanel />
+      </div>
+      <VirtualScroller
+        class="min-h-0 flex-1"
+        :data="renderRules"
+        :size="84"
+      >
+        <template #default="{ item: rule }: { item: Rule }">
+          <RuleCard
+            :key="`${rule.type}-${rule.payload}-${rule.proxy}`"
+            :rule="rule"
+            :index="rules.indexOf(rule) + 1"
+          />
+        </template>
+      </VirtualScroller>
+    </div>
     <ProxyGroupRulePenetrationDialog />
   </div>
 </template>
@@ -115,6 +123,7 @@
 import VirtualScroller from '@/components/common/VirtualScroller.vue'
 import ProxyGroupRulePenetrationDialog from '@/components/proxies/ProxyGroupRulePenetrationDialog.vue'
 import RuleCard from '@/components/rules/RuleCard.vue'
+import RuleDiagnosticsPanel from '@/components/rules/RuleDiagnosticsPanel.vue'
 import RuleFallbackCard from '@/components/rules/RuleFallbackCard.vue'
 import RuleLookupCard from '@/components/rules/RuleLookupCard.vue'
 import RuleProvider from '@/components/rules/RuleProvider.vue'
@@ -297,13 +306,10 @@ watch(
   },
 )
 
-const { padding, paddingTop } = usePaddingForViews({
+const { padding } = usePaddingForViews({
   offsetTop: 0,
   offsetBottom: 8,
 })
-const virtualScrollerStyle = computed(() => ({
-  paddingTop: `${paddingTop.value}px`,
-}))
 
 const isVirtualScroller = computed(() => {
   return (
