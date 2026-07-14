@@ -113,6 +113,40 @@
               默认写入“自定义-代理”和“自定义-直连”；如果 OpenClash 中中文显示异常，就改成拼音。
             </div>
           </form>
+
+          <div class="bg-base-200 rounded-box grid gap-2 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <div>
+                <div class="text-sm font-semibold">浏览器插件密钥</div>
+                <div class="text-base-content/60 text-xs">
+                  面板开启访问密码后，把这个密钥填到 Chrome / Edge 插件里。
+                </div>
+              </div>
+              <button
+                class="btn btn-warning btn-xs shrink-0"
+                type="button"
+                :disabled="submitting"
+                @click="handleRotatePluginToken"
+              >
+                重置
+              </button>
+            </div>
+            <div class="join min-w-0">
+              <input
+                class="input input-bordered input-sm join-item min-w-0 flex-1 font-mono text-xs"
+                :value="pluginToken || '加载中...'"
+                readonly
+              />
+              <button
+                class="btn btn-primary btn-sm join-item"
+                type="button"
+                :disabled="!pluginToken"
+                @click="copyText(pluginToken)"
+              >
+                复制
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -395,9 +429,11 @@ IP-CIDR,10.0.0.0/8,no-resolve"
 import {
   addCustomRuleAPI,
   applyCustomRuleToActiveYamlAPI,
+  fetchCustomRulePluginTokenAPI,
   fetchCustomRulesAPI,
   reloadConfigsAPI,
   restartCoreAPI,
+  rotateCustomRulePluginTokenAPI,
   updateCustomRulesSettingsAPI,
   updateCustomRulesTextAPI,
   updateRuleProviderAPI,
@@ -430,6 +466,7 @@ const proxyRulesText = ref('')
 const directRulesText = ref('')
 const newProxyGroupName = ref('')
 const newDirectGroupName = ref('')
+const pluginToken = ref('')
 
 const isCustomRuleComment = (value: string) => value.trim().startsWith('#')
 
@@ -524,7 +561,13 @@ const loadCustomRules = async () => {
   errorMessage.value = ''
 
   try {
-    customRules.value = await fetchCustomRulesAPI()
+    const [customRulesPayload, pluginTokenPayload] = await Promise.all([
+      fetchCustomRulesAPI(),
+      fetchCustomRulePluginTokenAPI(),
+    ])
+
+    customRules.value = customRulesPayload
+    pluginToken.value = pluginTokenPayload.token
     policyGroup.value = customRules.value.settings.policyGroup
     directPolicyGroup.value = customRules.value.settings.directPolicyGroup
     proxyRulesText.value = getRulesText('proxy')
@@ -535,6 +578,27 @@ const loadCustomRules = async () => {
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally {
     loading.value = false
+  }
+}
+
+const handleRotatePluginToken = async () => {
+  submitting.value = true
+
+  try {
+    const result = await rotateCustomRulePluginTokenAPI()
+    pluginToken.value = result.token
+    showNotification({
+      content: '插件密钥已重置，请同步更新浏览器插件里的密钥',
+      type: 'alert-success',
+      timeout: 3600,
+    })
+  } catch (error) {
+    showNotification({
+      content: error instanceof Error ? error.message : String(error),
+      type: 'alert-error',
+    })
+  } finally {
+    submitting.value = false
   }
 }
 

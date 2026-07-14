@@ -1,5 +1,24 @@
 <template>
-  <div class="grid gap-3 xl:grid-cols-2">
+  <div class="card app-card-padding gap-3">
+    <div class="flex items-center justify-between gap-2">
+      <div>
+        <div class="font-semibold">规则健康中心</div>
+        <div class="text-base-content/60 text-xs">规则冲突和运行状态集中检查。</div>
+      </div>
+      <button
+        class="btn btn-sm"
+        type="button"
+        @click="toggleDiagnosticsCollapsed"
+      >
+        {{ useRuleDiagnosticsCollapsed ? '展开' : '收起' }}
+      </button>
+    </div>
+  </div>
+
+  <div
+    v-if="!useRuleDiagnosticsCollapsed"
+    class="grid gap-3 xl:grid-cols-2"
+  >
     <div class="card app-card-padding gap-3">
       <div class="flex items-center justify-between gap-2">
         <div>
@@ -132,12 +151,17 @@ import {
   type LufeiDiagnosticsPayload,
 } from '@/api'
 import { showNotification } from '@/helper/notification'
+import { useRuleDiagnosticsCollapsed } from '@/store/settings'
 import { onMounted, ref } from 'vue'
 
 const conflictReport = ref<CustomRuleConflictPayload | null>(null)
 const diagnostics = ref<LufeiDiagnosticsPayload | null>(null)
 const conflictLoading = ref(false)
 const diagnosticsLoading = ref(false)
+
+const toggleDiagnosticsCollapsed = () => {
+  useRuleDiagnosticsCollapsed.value = !useRuleDiagnosticsCollapsed.value
+}
 
 const loadConflictReport = async () => {
   conflictLoading.value = true

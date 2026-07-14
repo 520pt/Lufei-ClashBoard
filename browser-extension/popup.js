@@ -2,6 +2,7 @@ const kindEl = document.querySelector('#kind')
 const ruleKindEl = document.querySelector('#rule-kind')
 const statusEl = document.querySelector('#status')
 const serverUrlEl = document.querySelector('#server-url')
+const pluginTokenEl = document.querySelector('#plugin-token')
 const manualTargetEl = document.querySelector('#manual-target')
 const preferRootDomainEl = document.querySelector('#prefer-root-domain')
 const addButton = document.querySelector('#add')
@@ -107,6 +108,7 @@ const renderDetected = (detected, options = {}) => {
 
 const getFormSettings = () => ({
   serverUrl: serverUrlEl.value.trim(),
+  pluginToken: pluginTokenEl.value.trim(),
   defaultPolicy: currentPolicy,
   preferRootDomain: preferRootDomainEl.checked,
 })
@@ -131,6 +133,7 @@ const refreshCurrentTab = async () => {
 
   currentSettings = response.settings
   serverUrlEl.value = currentSettings.serverUrl
+  pluginTokenEl.value = currentSettings.pluginToken || ''
   preferRootDomainEl.checked = currentSettings.preferRootDomain !== false
   setPolicy(currentSettings.defaultPolicy || 'proxy')
   renderDetected(response.detected, { syncInput: true })
@@ -243,7 +246,11 @@ testConnectionButton.addEventListener('click', async () => {
   setStatus('正在测试连接...', '')
 
   try {
-    const response = await sendMessage({ type: 'test-connection', serverUrl: serverUrlEl.value })
+    const response = await sendMessage({
+      type: 'test-connection',
+      serverUrl: serverUrlEl.value,
+      pluginToken: pluginTokenEl.value,
+    })
 
     if (!response?.ok) {
       throw new Error(response?.message || '连接失败')

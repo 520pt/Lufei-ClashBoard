@@ -1,5 +1,6 @@
 const DEFAULT_SETTINGS = {
   serverUrl: 'http://127.0.0.1:2048',
+  pluginToken: '',
   defaultPolicy: 'proxy',
   preferRootDomain: true,
 }
@@ -73,6 +74,7 @@ const getSettings = async () => {
 
   return {
     serverUrl: normalizeServerUrl(stored.serverUrl),
+    pluginToken: String(stored.pluginToken || '').trim(),
     defaultPolicy: stored.defaultPolicy === 'direct' ? 'direct' : 'proxy',
     preferRootDomain: stored.preferRootDomain !== false,
   }
@@ -81,9 +83,24 @@ const getSettings = async () => {
 const saveSettings = async (settings) => {
   await chrome.storage.sync.set({
     serverUrl: normalizeServerUrl(settings.serverUrl),
+    pluginToken: String(settings.pluginToken || '').trim(),
     defaultPolicy: settings.defaultPolicy === 'direct' ? 'direct' : 'proxy',
     preferRootDomain: settings.preferRootDomain !== false,
   })
+}
+
+const buildPanelHeaders = (settings, extraHeaders = {}) => {
+  const headers = {
+    Accept: 'application/json',
+    ...extraHeaders,
+  }
+  const pluginToken = String(settings?.pluginToken || '').trim()
+
+  if (pluginToken) {
+    headers['X-Lufei-Plugin-Token'] = pluginToken
+  }
+
+  return headers
 }
 
 const fetchJsonWithTimeout = async (url, timeoutMs = LAN_SCAN_TIMEOUT_MS) => {
@@ -277,13 +294,12 @@ const getActiveTab = async () => {
   return tab || null
 }
 
-const addCustomRule = async ({ target, kind, policy, serverUrl }) => {
-  const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/custom-rules`, {
+const addCustomRule = async ({ target, kind, policy, settings }) => {
+  const response = await fetch(`${normalizeServerUrl(settings.serverUrl)}/api/custom-rules`, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
+    headers: buildPanelHeaders(settings, {
       'Content-Type': 'application/json',
-    },
+    }),
     body: JSON.stringify({ target, kind, policy }),
   })
   const data = await response.json().catch(() => ({}))
@@ -295,13 +311,13 @@ const addCustomRule = async ({ target, kind, policy, serverUrl }) => {
   return data
 }
 
-const getCustomRuleStatus = async ({ target, kind, serverUrl }) => {
-  const url = new URL(`${normalizeServerUrl(serverUrl)}/api/custom-rules/status`)
+const getCustomRuleStatus = async ({ target, kind, settings }) => {
+  const url = new URL(`${normalizeServerUrl(settings.serverUrl)}/api/custom-rules/status`)
   url.searchParams.set('target', target)
   url.searchParams.set('kind', kind || 'auto')
 
   const response = await fetch(url.toString(), {
-    headers: { Accept: 'application/json' },
+    headers: buildPanelHeaders(settings),
     cache: 'no-store',
   })
   const data = await response.json().catch(() => ({}))
@@ -313,13 +329,12 @@ const getCustomRuleStatus = async ({ target, kind, serverUrl }) => {
   return data
 }
 
-const deleteCustomRule = async ({ rule, policy, serverUrl }) => {
-  const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/custom-rules`, {
+const deleteCustomRule = async ({ rule, policy, settings }) => {
+  const response = await fetch(`${normalizeServerUrl(settings.serverUrl)}/api/custom-rules`, {
     method: 'DELETE',
-    headers: {
-      Accept: 'application/json',
+    headers: buildPanelHeaders(settings, {
       'Content-Type': 'application/json',
-    },
+    }),
     body: JSON.stringify({ rule, policy }),
   })
   const data = await response.json().catch(() => ({}))
@@ -380,7 +395,7 @@ const addCurrentTabRule = async ({ policy, kind, target: targetOverride, url } =
     target: batchTarget ? rawTargetOverride : detected.target,
     kind: finalKind,
     policy: finalPolicy,
-    serverUrl: settings.serverUrl,
+    settings,
   })
   const summary = Array.isArray(result.results)
     ? `新增 ${result.addedCount || 0} 条，已存在 ${result.skippedCount || 0} 条${
@@ -436,7 +451,7 @@ const getCurrentRuleStatus = async ({ kind, target, url } = {}) => {
   const status = await getCustomRuleStatus({
     target: resolved.target,
     kind: resolved.kind,
-    serverUrl: resolved.settings.serverUrl,
+    settings: resolved.settings,
   })
 
   return {
@@ -452,7 +467,7 @@ const deleteCurrentRule = async ({ kind, target, url } = {}) => {
   const status = await getCustomRuleStatus({
     target: resolved.target,
     kind: resolved.kind,
-    serverUrl: resolved.settings.serverUrl,
+    settings: resolved.settings,
   })
 
   if (!status.found) {
@@ -468,7 +483,7 @@ const deleteCurrentRule = async ({ kind, target, url } = {}) => {
   const result = await deleteCustomRule({
     rule: status.rule,
     policy: status.policy,
-    serverUrl: resolved.settings.serverUrl,
+    settings: resolved.settings,
   })
 
   await notify('LuFei 自定义规则', `已删除：${status.rule}`)
@@ -487,14 +502,14 @@ const switchCurrentRulePolicy = async ({ kind, target, policy, url } = {}) => {
   const status = await getCustomRuleStatus({
     target: resolved.target,
     kind: resolved.kind,
-    serverUrl: resolved.settings.serverUrl,
+    settings: resolved.settings,
   })
 
   if (status.found) {
     await deleteCustomRule({
       rule: status.rule,
       policy: status.policy,
-      serverUrl: resolved.settings.serverUrl,
+      settings: resolved.settings,
     })
   }
 
@@ -502,7 +517,7 @@ const switchCurrentRulePolicy = async ({ kind, target, policy, url } = {}) => {
     target: status.rule || resolved.target,
     kind: 'raw',
     policy: nextPolicy,
-    serverUrl: resolved.settings.serverUrl,
+    settings: resolved.settings,
   })
 
   await notify('LuFei 自定义规则', `已切换到${POLICY_LABELS[nextPolicy]}：${result.rule}`)
@@ -516,9 +531,9 @@ const switchCurrentRulePolicy = async ({ kind, target, policy, url } = {}) => {
   }
 }
 
-const testConnection = async (serverUrl) => {
-  const response = await fetch(`${normalizeServerUrl(serverUrl)}/api/custom-rules`, {
-    headers: { Accept: 'application/json' },
+const testConnection = async (settings) => {
+  const response = await fetch(`${normalizeServerUrl(settings.serverUrl)}/api/custom-rules`, {
+    headers: buildPanelHeaders(settings),
     cache: 'no-store',
   })
   const data = await response.json().catch(() => ({}))
@@ -626,7 +641,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message?.type === 'test-connection') {
-      sendResponse({ ok: true, result: await testConnection(message.serverUrl) })
+      sendResponse({
+        ok: true,
+        result: await testConnection({
+          serverUrl: message.serverUrl,
+          pluginToken: message.pluginToken,
+        }),
+      })
       return
     }
 

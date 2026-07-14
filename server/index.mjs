@@ -69,6 +69,7 @@ const ACCESS_PASSWORD_INVALID_CODE = 'ACCESS_PASSWORD_INVALID'
 const RULE_SOURCE_SSH_REQUIRED_CODE = 'RULE_SOURCE_SSH_REQUIRED'
 const CUSTOM_RULES_KEY = 'custom-rules/list'
 const CUSTOM_RULES_SETTINGS_KEY = 'custom-rules/settings'
+const CUSTOM_RULES_PLUGIN_TOKEN_KEY = 'custom-rules/plugin-token'
 const DEFAULT_CUSTOM_RULE_PROVIDER_NAME = 'LuFei / Custom'
 const DEFAULT_CUSTOM_RULE_DIRECT_PROVIDER_NAME = 'LuFei / Custom Direct'
 const DEFAULT_CUSTOM_RULE_POLICY_GROUP = '自定义-代理'
@@ -2482,11 +2483,82 @@ const sendAccessPasswordRequired = (res) => {
   })
 }
 
+const readCustomRulePluginToken = () => {
+  const row = getStorageValueStatement.get(CUSTOM_RULES_PLUGIN_TOKEN_KEY)
+  return typeof row?.value === 'string' ? row.value.trim() : ''
+}
+
+const createCustomRulePluginToken = () => randomBytes(32).toString('base64url')
+
+const ensureCustomRulePluginToken = () => {
+  const current = readCustomRulePluginToken()
+
+  if (current) {
+    return current
+  }
+
+  const token = createCustomRulePluginToken()
+  upsertStorageValueStatement.run(CUSTOM_RULES_PLUGIN_TOKEN_KEY, token)
+  return token
+}
+
+const rotateCustomRulePluginToken = () => {
+  const token = createCustomRulePluginToken()
+  upsertStorageValueStatement.run(CUSTOM_RULES_PLUGIN_TOKEN_KEY, token)
+  return token
+}
+
+const isPluginTokenAllowedPath = (requestPath) => {
+  return requestPath === '/api/custom-rules' || requestPath === '/api/custom-rules/status'
+}
+
+const getPluginTokenFromRequest = (req) => {
+  const headerToken = req.headers?.['x-lufei-plugin-token']
+
+  if (Array.isArray(headerToken)) {
+    return headerToken[0] || ''
+  }
+
+  if (typeof headerToken === 'string' && headerToken.trim()) {
+    return headerToken.trim()
+  }
+
+  const authorization = String(req.headers?.authorization || '').trim()
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i)
+
+  return bearerMatch ? bearerMatch[1].trim() : ''
+}
+
+const getRequestPluginAuthStatus = (req) => {
+  const config = readAccessAuthConfig()
+  const token = readCustomRulePluginToken()
+
+  if (!config.enabled || !token) {
+    return {
+      enabled: false,
+      authenticated: !config.enabled,
+    }
+  }
+
+  if (!isPluginTokenAllowedPath(req.path)) {
+    return {
+      enabled: true,
+      authenticated: false,
+    }
+  }
+
+  return {
+    enabled: true,
+    authenticated: safeTokenEquals(getPluginTokenFromRequest(req), token),
+  }
+}
+
 const readSnapshot = () => {
   const snapshot = {}
 
   for (const row of getSnapshotStatement.all()) {
     if (row.key === backgroundImageStorageKey) continue
+    if (row.key === CUSTOM_RULES_PLUGIN_TOKEN_KEY) continue
     snapshot[row.key] = row.value
   }
 
@@ -7297,6 +7369,7 @@ app.use((req, res, next) => {
 
   if (
     req.path === '/api/health' ||
+    req.path === '/api/lufei-clashboard/ping' ||
     req.path === '/api/auth/status' ||
     req.path === '/api/auth/login' ||
     req.path === '/api/auth/logout'
@@ -7308,6 +7381,11 @@ app.use((req, res, next) => {
   const authStatus = getRequestAccessAuthStatus(req)
 
   if (!authStatus.enabled || authStatus.authenticated) {
+    next()
+    return
+  }
+
+  if (getRequestPluginAuthStatus(req).authenticated) {
     next()
     return
   }
@@ -7921,6 +7999,16 @@ app.get('/api/custom-rules/status', async (req, res) => {
   }
 })
 
+app.get('/api/custom-rules/plugin-token', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({ token: ensureCustomRulePluginToken() })
+})
+
+app.post('/api/custom-rules/plugin-token', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({ token: rotateCustomRulePluginToken() })
+})
+
 app.get('/api/lufei-clashboard/ping', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.json({
@@ -8272,6 +8360,7 @@ export {
   getRemoteYamlBackupCleanupCommand as getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPath as getRemoteYamlBackupPathForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
+  getRequestPluginAuthStatus as getRequestPluginAuthStatusForTesting,
   getWritableProxyDomainRulePath as getWritableProxyDomainRulePathForTesting,
   isLikelyClashControllerResult as isLikelyClashControllerResultForTesting,
   makeCustomRule,

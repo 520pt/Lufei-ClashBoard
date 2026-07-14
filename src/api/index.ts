@@ -542,6 +542,10 @@ export type CustomRulesPayload = {
   }
 }
 
+export type CustomRulePluginTokenPayload = {
+  token: string
+}
+
 export type CustomRuleGroup = {
   name: string
   policy: CustomRulePolicy
@@ -657,6 +661,41 @@ export const fetchLufeiDiagnosticsAPI = async () => {
   }
 
   return (await response.json()) as LufeiDiagnosticsPayload
+}
+
+export const fetchCustomRulePluginTokenAPI = async () => {
+  const response = await fetchServerApi('/api/custom-rules/plugin-token', {
+    headers: {
+      Accept: 'application/json',
+    },
+    cache: 'no-store',
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data?.message || `Failed to fetch plugin token: ${response.status}`)
+  }
+
+  return data as CustomRulePluginTokenPayload
+}
+
+export const rotateCustomRulePluginTokenAPI = async () => {
+  const response = await fetchServerApi('/api/custom-rules/plugin-token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+    },
+    cache: 'no-store',
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data?.message || `Failed to rotate plugin token: ${response.status}`)
+  }
+
+  return data as CustomRulePluginTokenPayload
 }
 
 export const addCustomRuleAPI = async (

@@ -285,6 +285,10 @@ export const displayNowNodeInRule = useStorage('config/display-now-node-in-rule'
 export const displayLatencyInRule = useStorage('config/display-latency-in-rule', true)
 export const disconnectOnRuleDisable = useStorage('config/disconnect-on-rule-disable', true)
 export const useRuleGridMode = useStorage('config/use-rule-grid-mode', false)
+export const useRuleDiagnosticsCollapsed = useStorage(
+  'config/use-rule-diagnostics-collapsed',
+  false,
+)
 
 // logs
 export const logRetentionLimit = useStorage<number>('config/log-retention-limit', 1000)

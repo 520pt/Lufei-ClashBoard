@@ -45,6 +45,7 @@ const {
   getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPathForTesting,
   getRequestAccessAuthStatusForTesting,
+  getRequestPluginAuthStatusForTesting,
   isLikelyClashControllerResultForTesting,
   makeCustomRule,
   normalizeWritableProxyDomainRuleInputForTesting,
@@ -104,6 +105,63 @@ test('service auth state is enforced from persisted settings', () => {
   )
 })
 
+test('custom rule plugin token authenticates protected custom rule APIs', () => {
+  replaceSnapshot({
+    'config/access-password-enabled': 'true',
+    'config/access-password': 'test-secret',
+    'custom-rules/plugin-token': 'plugin-token-123',
+  })
+
+  assert.deepEqual(
+    getRequestPluginAuthStatusForTesting({
+      path: '/api/custom-rules',
+      headers: {
+        'x-lufei-plugin-token': 'plugin-token-123',
+      },
+    }),
+    {
+      enabled: true,
+      authenticated: true,
+    },
+  )
+
+  assert.deepEqual(
+    getRequestPluginAuthStatusForTesting({
+      path: '/api/custom-rules',
+      headers: {
+        authorization: 'Bearer wrong-token',
+      },
+    }),
+    {
+      enabled: true,
+      authenticated: false,
+    },
+  )
+
+  assert.deepEqual(
+    getRequestPluginAuthStatusForTesting({
+      path: '/api/storage',
+      headers: {
+        'x-lufei-plugin-token': 'plugin-token-123',
+      },
+    }),
+    {
+      enabled: true,
+      authenticated: false,
+    },
+  )
+})
+test('managed settings export does not include custom rule plugin token', () => {
+  replaceSnapshot({
+    'config/default-theme': 'dark',
+    'custom-rules/plugin-token': 'plugin-token-123',
+  })
+
+  const snapshot = readSnapshot()
+
+  assert.equal(snapshot['config/default-theme'], 'dark')
+  assert.equal(snapshot['custom-rules/plugin-token'], undefined)
+})
 test('rule provider search returns cached matches', async () => {
   seedRuleProviderCacheForTesting([
     {
@@ -1716,3 +1774,5 @@ test('lufei diagnostics reports storage, custom rules and conflicts', () => {
   assert.equal(diagnostics.checks.find((item) => item.key === 'ssh').status, 'warning')
   assert.equal(diagnostics.checks.find((item) => item.key === 'conflicts').status, 'warning')
 })
+
+
