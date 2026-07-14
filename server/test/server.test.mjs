@@ -1325,6 +1325,86 @@ rules:
   )
 })
 
+test('OpenClash plain custom rule files are supported', () => {
+  const content = `# OpenClash custom rules
+DOMAIN-SUFFIX,baidu.com,DIRECT
+
+SRC-IP-CIDR,10.0.0.0/24,DIRECT
+`
+  const entries = parseProxyDomainCustomRulesFromYamlContentForTesting(content, 'pre', {
+    plainText: true,
+    source: '/etc/openclash/custom/openclash_custom_rules.list',
+  })
+
+  assert.deepEqual(
+    entries.map((entry) => entry.raw),
+    ['DOMAIN-SUFFIX,baidu.com,DIRECT', 'SRC-IP-CIDR,10.0.0.0/24,DIRECT'],
+  )
+  assert.deepEqual(
+    entries.map((entry) => entry.line),
+    [2, 4],
+  )
+  assert.deepEqual(
+    parseProxyDomainCustomRulesFromYamlContentForTesting('rules:\n', 'pre', {
+      plainText: true,
+    }),
+    [],
+  )
+
+  const added = addProxyDomainRuleToYamlContentForTesting(
+    content,
+    {
+      domain: 'new.example',
+      target: 'DIRECT',
+      customGroupMode: 'pre',
+    },
+    { plainText: true },
+  )
+
+  assert.equal(added.changed, true)
+  assert.match(added.content, /SRC-IP-CIDR,10\.0\.0\.0\/24,DIRECT\nDOMAIN-SUFFIX,new\.example,DIRECT\n/)
+
+  const edited = updateProxyDomainRuleInYamlContentForTesting(
+    added.content,
+    'DOMAIN-SUFFIX,new.example,DIRECT',
+    {
+      type: 'DOMAIN',
+      value: 'updated.example',
+      target: 'DIRECT',
+      customGroupMode: 'pre',
+    },
+    { plainText: true },
+  )
+
+  assert.equal(edited.changed, true)
+  assert.match(edited.content, /DOMAIN,updated\.example,DIRECT/)
+
+  const reordered = reorderProxyDomainRulesInYamlContentForTesting(
+    edited.content,
+    [
+      'DOMAIN,updated.example,DIRECT',
+      'DOMAIN-SUFFIX,baidu.com,DIRECT',
+      'SRC-IP-CIDR,10.0.0.0/24,DIRECT',
+    ],
+    { plainText: true },
+  )
+
+  assert.equal(reordered.changed, true)
+  assert.match(
+    reordered.content,
+    /# OpenClash custom rules\nDOMAIN,updated\.example,DIRECT\n\nDOMAIN-SUFFIX,baidu\.com,DIRECT\nSRC-IP-CIDR,10\.0\.0\.0\/24,DIRECT\n/,
+  )
+
+  const deleted = deleteProxyDomainRuleInYamlContentForTesting(
+    reordered.content,
+    'DOMAIN,updated.example,DIRECT',
+    { plainText: true },
+  )
+
+  assert.equal(deleted.changed, true)
+  assert.doesNotMatch(deleted.content, /updated\.example/)
+})
+
 test('Nikki custom rules are split into pre and post sections around rule sets', () => {
   const content = `rules:
 - DOMAIN,pre.example,DIRECT

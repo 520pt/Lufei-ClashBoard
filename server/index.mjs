@@ -3507,7 +3507,12 @@ const buildRuleEntry = (type, content, params = [], options = {}) => {
 const parseRuleEntryFromTextLine = (rawLine, index = null, source = '') => {
   const line = String(rawLine || '').trim()
 
-  if (!line || line.startsWith('#') || line.startsWith('//') || /^payload\s*:/i.test(line)) {
+  if (
+    !line ||
+    line.startsWith('#') ||
+    line.startsWith('//') ||
+    /^(payload|rules)\s*:/i.test(line)
+  ) {
     return null
   }
 
@@ -3893,7 +3898,72 @@ const getProxyDomainRuleInsertIndex = (rulesNode, options) => {
   return matchedIndex >= 0 ? matchedIndex : rulesNode.items.length
 }
 
-const addProxyDomainRuleToYamlContent = (content, input = {}) => {
+const getPlainTextRuleLineItems = (content, source = '') => {
+  const sourceContent = String(content || '')
+  const items = []
+  let lineStart = 0
+  let lineNumber = 1
+
+  while (lineStart < sourceContent.length) {
+    const newlineIndex = sourceContent.indexOf('\n', lineStart)
+    const lineEnd = newlineIndex >= 0 ? newlineIndex + 1 : sourceContent.length
+    const rawLine = sourceContent.slice(lineStart, lineEnd)
+    const lineWithoutNewline = rawLine.replace(/\r?\n$/, '')
+    const entry = parseRuleEntryFromTextLine(lineWithoutNewline, lineNumber, source)
+
+    if (entry) {
+      items.push({
+        entry,
+        start: lineStart,
+        end: lineStart + lineWithoutNewline.length,
+        lineEnd,
+      })
+    }
+
+    lineStart = lineEnd
+    lineNumber += 1
+  }
+
+  return items
+}
+
+const addProxyDomainRuleToPlainTextContent = (content, input = {}) => {
+  const normalizedInput = normalizeProxyDomainRuleInput(input)
+  const sourceContent =
+    String(content || '').trim() === 'rules:' ? '' : String(content || '')
+  const targetComparableRule = getComparableProxyDomainRule(normalizedInput.rule)
+  const existingRule = getPlainTextRuleLineItems(sourceContent).some(
+    (item) => getComparableProxyDomainRule(item.entry.raw) === targetComparableRule,
+  )
+
+  if (existingRule) {
+    return {
+      changed: false,
+      duplicated: true,
+      content: sourceContent,
+      rule: normalizedInput.rule,
+      insertMode: normalizedInput.insertMode,
+      beforeTypes: normalizedInput.beforeTypes,
+    }
+  }
+
+  const separator = sourceContent && !sourceContent.endsWith('\n') ? '\n' : ''
+
+  return {
+    changed: true,
+    duplicated: false,
+    content: `${sourceContent}${separator}${normalizedInput.rule}\n`,
+    rule: normalizedInput.rule,
+    insertMode: normalizedInput.insertMode,
+    beforeTypes: normalizedInput.beforeTypes,
+  }
+}
+
+const addProxyDomainRuleToYamlContent = (content, input = {}, options = {}) => {
+  if (options.plainText) {
+    return addProxyDomainRuleToPlainTextContent(content, input)
+  }
+
   const normalizedInput = normalizeProxyDomainRuleInput(input)
   const document = parseYamlDocument(String(content || ''))
 
@@ -3941,7 +4011,60 @@ const addProxyDomainRuleToYamlContent = (content, input = {}) => {
   }
 }
 
-const updateProxyDomainRuleInYamlContent = (content, originalRule, input = {}) => {
+const updateProxyDomainRuleInPlainTextContent = (content, originalRule, input = {}) => {
+  const normalizedInput = normalizeProxyDomainRuleInput(input)
+  const normalizedOriginalRule = normalizeOrderedProxyDomainRule(originalRule)
+
+  if (!normalizedOriginalRule) {
+    throw createBadRequestError('originalRule is required')
+  }
+
+  const sourceContent = String(content || '')
+  const lineItems = getPlainTextRuleLineItems(sourceContent)
+  const matchedItem = lineItems.find(
+    (item) => normalizeOrderedProxyDomainRule(item.entry.raw) === normalizedOriginalRule,
+  )
+
+  if (!matchedItem) {
+    throw createBadRequestError('Original custom rule was not found')
+  }
+
+  const updatedComparableRule = getComparableProxyDomainRule(normalizedInput.rule)
+  const duplicated = lineItems.some((item) => {
+    return (
+      item !== matchedItem && getComparableProxyDomainRule(item.entry.raw) === updatedComparableRule
+    )
+  })
+
+  if (duplicated) {
+    throw createBadRequestError('Updated custom rule already exists')
+  }
+
+  if (normalizeOrderedProxyDomainRule(normalizedInput.rule) === normalizedOriginalRule) {
+    return {
+      changed: false,
+      content: sourceContent,
+      originalRule: normalizedOriginalRule,
+      rule: normalizedInput.rule,
+    }
+  }
+
+  return {
+    changed: true,
+    content:
+      sourceContent.slice(0, matchedItem.start) +
+      normalizedInput.rule +
+      sourceContent.slice(matchedItem.end),
+    originalRule: normalizedOriginalRule,
+    rule: normalizedInput.rule,
+  }
+}
+
+const updateProxyDomainRuleInYamlContent = (content, originalRule, input = {}, options = {}) => {
+  if (options.plainText) {
+    return updateProxyDomainRuleInPlainTextContent(content, originalRule, input)
+  }
+
   const normalizedInput = normalizeProxyDomainRuleInput(input)
   const normalizedOriginalRule = normalizeOrderedProxyDomainRule(originalRule)
 
@@ -4014,7 +4137,34 @@ const updateProxyDomainRuleInYamlContent = (content, originalRule, input = {}) =
   }
 }
 
-const deleteProxyDomainRuleInYamlContent = (content, rule) => {
+const deleteProxyDomainRuleInPlainTextContent = (content, rule) => {
+  const sourceContent = String(content || '')
+  const normalizedRule = normalizeOrderedProxyDomainRule(rule)
+
+  if (!normalizedRule) {
+    throw createBadRequestError('rule is required')
+  }
+
+  const matchedItem = getPlainTextRuleLineItems(sourceContent).find(
+    (item) => normalizeOrderedProxyDomainRule(item.entry.raw) === normalizedRule,
+  )
+
+  if (!matchedItem) {
+    throw createBadRequestError('Custom rule was not found')
+  }
+
+  return {
+    changed: true,
+    content: sourceContent.slice(0, matchedItem.start) + sourceContent.slice(matchedItem.lineEnd),
+    rule: normalizedRule,
+  }
+}
+
+const deleteProxyDomainRuleInYamlContent = (content, rule, options = {}) => {
+  if (options.plainText) {
+    return deleteProxyDomainRuleInPlainTextContent(content, rule)
+  }
+
   const sourceContent = String(content || '')
   const normalizedRule = normalizeOrderedProxyDomainRule(rule)
 
@@ -4082,7 +4232,71 @@ const buildProxyDomainRuleCounts = (rules) => {
   return counts
 }
 
-const reorderProxyDomainRulesInYamlContent = (content, orderedRules = []) => {
+const reorderProxyDomainRulesInPlainTextContent = (content, orderedRules = []) => {
+  if (!Array.isArray(orderedRules) || orderedRules.some((rule) => typeof rule !== 'string')) {
+    throw createBadRequestError('orderedRules must be an array of strings')
+  }
+
+  const sourceContent = String(content || '')
+  const lineItems = getPlainTextRuleLineItems(sourceContent)
+  const currentRules = lineItems.map((item) => item.entry.raw)
+
+  if (orderedRules.length !== currentRules.length) {
+    throw createBadRequestError('orderedRules must contain every enabled custom rule')
+  }
+
+  const currentCounts = buildProxyDomainRuleCounts(currentRules)
+  const orderedCounts = buildProxyDomainRuleCounts(orderedRules)
+
+  if (
+    currentCounts.size !== orderedCounts.size ||
+    [...currentCounts].some(([rule, count]) => orderedCounts.get(rule) !== count)
+  ) {
+    throw createBadRequestError('orderedRules must be a permutation of the current custom rules')
+  }
+
+  const changed = currentRules.some(
+    (rule, index) =>
+      normalizeOrderedProxyDomainRule(rule) !==
+      normalizeOrderedProxyDomainRule(orderedRules[index]),
+  )
+
+  if (!changed) {
+    return {
+      changed: false,
+      content: sourceContent,
+      count: currentRules.length,
+    }
+  }
+
+  let updatedContent = sourceContent
+  const replacements = lineItems.map((item, index) => ({
+    start: item.start,
+    end: item.end,
+    value: normalizeOrderedProxyDomainRule(orderedRules[index]),
+  }))
+
+  replacements
+    .sort((left, right) => right.start - left.start)
+    .forEach((replacement) => {
+      updatedContent =
+        updatedContent.slice(0, replacement.start) +
+        replacement.value +
+        updatedContent.slice(replacement.end)
+    })
+
+  return {
+    changed: true,
+    content: updatedContent,
+    count: currentRules.length,
+  }
+}
+
+const reorderProxyDomainRulesInYamlContent = (content, orderedRules = [], options = {}) => {
+  if (options.plainText) {
+    return reorderProxyDomainRulesInPlainTextContent(content, orderedRules)
+  }
+
   if (!Array.isArray(orderedRules) || orderedRules.some((rule) => typeof rule !== 'string')) {
     throw createBadRequestError('orderedRules must be an array of strings')
   }
@@ -4178,10 +4392,13 @@ const addProxyDomainRuleToRemoteConfig = async (input = {}) => {
         snapshot,
         normalizedInput.customGroupMode,
       )
+      const plainText = snapshot.plugin === 'openclash'
       const content = (await remoteFileExists(client, configPath))
         ? await readRemoteFile(client, configPath)
-        : 'rules:\n'
-      const result = addProxyDomainRuleToYamlContent(content, normalizedInput)
+        : plainText
+          ? ''
+          : 'rules:\n'
+      const result = addProxyDomainRuleToYamlContent(content, normalizedInput, { plainText })
 
       if (result.changed) {
         await writeRemoteFile(client, configPath, result.content)
@@ -4232,8 +4449,11 @@ const updateProxyDomainRuleOnOpenWrt = async (input = {}) => {
         snapshot,
         normalizedInput.customGroupMode,
       )
+      const plainText = snapshot.plugin === 'openclash'
       const content = await readRemoteFile(client, configPath)
-      const result = updateProxyDomainRuleInYamlContent(content, originalRule, normalizedInput)
+      const result = updateProxyDomainRuleInYamlContent(content, originalRule, normalizedInput, {
+        plainText,
+      })
 
       if (result.changed) {
         await writeRemoteFile(client, configPath, result.content)
@@ -4281,8 +4501,9 @@ const deleteProxyDomainRuleOnOpenWrt = async (input = {}) => {
     return await withOpenWrtSshClient(config, async (client) => {
       const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
       const configPath = getWritableProxyDomainRulePath(snapshot, customGroupMode)
+      const plainText = snapshot.plugin === 'openclash'
       const content = await readRemoteFile(client, configPath)
-      const result = deleteProxyDomainRuleInYamlContent(content, rule)
+      const result = deleteProxyDomainRuleInYamlContent(content, rule, { plainText })
 
       await writeRemoteFile(client, configPath, result.content)
       proxyGroupRulePenetrationCache.clear()
@@ -4371,8 +4592,9 @@ const reorderProxyDomainRulesOnOpenWrt = async (input = {}) => {
     return await withOpenWrtSshClient(config, async (client) => {
       const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
       const configPath = getWritableProxyDomainRulePath(snapshot, customGroupMode)
+      const plainText = snapshot.plugin === 'openclash'
       const content = await readRemoteFile(client, configPath)
-      const result = reorderProxyDomainRulesInYamlContent(content, orderedRules)
+      const result = reorderProxyDomainRulesInYamlContent(content, orderedRules, { plainText })
 
       if (result.changed) {
         await writeRemoteFile(client, configPath, result.content)
@@ -4466,6 +4688,13 @@ const parseProxyDomainCustomRulesFromYamlContent = (
   options = {},
 ) => {
   const sourceContent = String(content || '')
+
+  if (options.plainText) {
+    return getPlainTextRuleLineItems(sourceContent, options.source || 'custom')
+      .map((item) => item.entry)
+      .filter((entry) => isProxyGroupCustomDirectRule(entry.type))
+  }
+
   const document = parseYamlDocument(sourceContent)
 
   if (document.errors.length > 0) {
@@ -4532,13 +4761,17 @@ const readProxyDomainCustomRulesOnOpenWrt = async (customGroupMode) => {
     return await withOpenWrtSshClient(config, async (client) => {
       const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
       const configPath = getWritableProxyDomainRulePath(snapshot, normalizedCustomGroupMode)
+      const plainText = snapshot.plugin === 'openclash'
       const content = (await remoteFileExists(client, configPath))
         ? await readRemoteFile(client, configPath)
-        : 'rules:\n'
+        : plainText
+          ? ''
+          : 'rules:\n'
       const items = parseProxyDomainCustomRulesFromYamlContent(
         content,
         normalizedCustomGroupMode,
         {
+          plainText,
           source: configPath,
           standalone: snapshot.plugin === 'openclash',
         },

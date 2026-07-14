@@ -28,7 +28,12 @@ export const normalizeProxyRuleTypeName = (value: string) => {
     .replace(/[^a-z0-9]/gi, '')
     .toUpperCase()
 
-  return RULE_TYPE_ALIAS_MAP.get(normalizedKey) || String(value || '').trim().toUpperCase()
+  return (
+    RULE_TYPE_ALIAS_MAP.get(normalizedKey) ||
+    String(value || '')
+      .trim()
+      .toUpperCase()
+  )
 }
 
 export const isProxyRuleEnabled = (rule: Rule) => {
@@ -86,16 +91,16 @@ export const getCustomDomainGroupSections = (rules: Rule[]) => {
 }
 
 export const getDomainGroupNames = (rules: Rule[], policyGroupNames: string[]) => {
-  const { pre, post } = getCustomDomainGroupSections(rules)
   const orderedPolicyGroupNames = policyGroupNames.filter((name) => !isDomainGroupCustomKey(name))
   const otherIndex = orderedPolicyGroupNames.indexOf('其他')
-  const groupsBeforeOther = otherIndex >= 0 ? orderedPolicyGroupNames.slice(0, otherIndex) : orderedPolicyGroupNames
+  const groupsBeforeOther =
+    otherIndex >= 0 ? orderedPolicyGroupNames.slice(0, otherIndex) : orderedPolicyGroupNames
   const groupsFromOther = otherIndex >= 0 ? orderedPolicyGroupNames.slice(otherIndex) : []
 
   return [
-    ...(pre.length > 0 ? [DOMAIN_GROUP_PRE_CUSTOM_KEY] : []),
+    DOMAIN_GROUP_PRE_CUSTOM_KEY,
     ...groupsBeforeOther,
-    ...(post.length > 0 ? [DOMAIN_GROUP_POST_CUSTOM_KEY] : []),
+    DOMAIN_GROUP_POST_CUSTOM_KEY,
     ...groupsFromOther,
   ]
 }
