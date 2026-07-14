@@ -19,16 +19,19 @@ const serverModuleUrl = new URL(`./../index.mjs?test=${Date.now()}`, import.meta
 const {
   addCustomRule,
   addCustomRules,
+  addProxyDomainRuleToYamlContentForTesting,
   applyCustomRuleProviderToYamlContentForTesting,
   buildPublicCustomRuleUrlForTesting,
   buildCustomRuleSnippets,
   clashControllerDiscoveryPortsForTesting,
   createAccessSessionTokenForTesting,
   deleteCustomRuleForTesting,
+  deleteProxyDomainRuleInYamlContentForTesting,
   extractOpenWrtVisibleClientIpv4ForTesting,
   extractNikkiYamlConfigPathsFromProcessListForTesting,
   extractRemoteYamlConfigPathsFromTextForTesting,
   extractRemoteYamlConfigPathsFromUciForTesting,
+  getWritableProxyDomainRulePathForTesting,
   getOpenWrtDiscoveryConcurrencyForTesting,
   getOpenWrtHttpSignalsForTesting,
   getOpenWrtLanScanTargetsForTesting,
@@ -40,10 +43,13 @@ const {
   getRequestAccessAuthStatusForTesting,
   isLikelyClashControllerResultForTesting,
   makeCustomRule,
+  normalizeWritableProxyDomainRuleInputForTesting,
+  parseProxyDomainCustomRulesFromYamlContentForTesting,
   readCustomRuleListText,
   readCustomRules,
   readCustomRulesSettings,
   readSnapshot,
+  reorderProxyDomainRulesInYamlContentForTesting,
   replaceManagedSnapshotForTesting,
   replaceSnapshot,
   replaceCustomRulesTextForTesting,
@@ -54,6 +60,7 @@ const {
   shouldIncludeOpenWrtCandidateForTesting,
   shutdownServer,
   syncCustomRuleProvidersToCacheForTesting,
+  updateProxyDomainRuleInYamlContentForTesting,
   updateCustomRulesSettings,
 } = await import(serverModuleUrl.href)
 
@@ -1072,4 +1079,406 @@ test('proxy group penetration cache expires when provider cache changes', () => 
 
   assert.equal(refreshedEntry.items.length, 1)
   assert.equal(refreshedEntry.items[0].content, 'example.com')
+})
+
+test('proxy domain rule append defaults to the end of YAML rules', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `port: 7890
+rules:
+  - DOMAIN-SUFFIX,old.example,Proxy
+  - MATCH,DIRECT
+`,
+    {
+      domain: 'new.example',
+      groupName: 'Streaming',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - DOMAIN-SUFFIX,old\.example,Proxy\n  - MATCH,DIRECT\n  - DOMAIN-SUFFIX,new\.example,Streaming\n/,
+  )
+})
+
+test('proxy domain rule can be inserted before configured rule types', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - DOMAIN-SUFFIX,old.example,Proxy
+  - FINAL,DIRECT
+`,
+    {
+      domain: 'new.example',
+      groupName: 'Streaming',
+      insertMode: 'before-types',
+      beforeTypes: ['MATCH', 'FINAL'],
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - DOMAIN-SUFFIX,old\.example,Proxy\n  - DOMAIN-SUFFIX,new\.example,Streaming\n  - FINAL,DIRECT\n/,
+  )
+})
+
+test('proxy domain rule falls back to append when configured anchors are missing', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - DOMAIN-SUFFIX,old.example,Proxy
+`,
+    {
+      domain: 'new.example',
+      groupName: 'Streaming',
+      insertMode: 'before-types',
+      beforeTypes: ['MATCH', 'FINAL'],
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - DOMAIN-SUFFIX,old\.example,Proxy\n  - DOMAIN-SUFFIX,new\.example,Streaming\n/,
+  )
+})
+
+test('proxy domain rule can be inserted before the selected rule set', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - RULE-SET,GlobalRules,DIRECT
+  - RULE-SET,StreamingRules,Streaming
+  - MATCH,DIRECT
+`,
+    {
+      value: 'new.example',
+      groupName: 'Streaming',
+      target: 'Streaming',
+      providerName: 'StreamingRules',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - RULE-SET,GlobalRules,DIRECT\n  - DOMAIN-SUFFIX,new\.example,Streaming\n  - RULE-SET,StreamingRules,Streaming\n  - MATCH,DIRECT\n/,
+  )
+})
+
+test('proxy domain rule can be inserted before the first rule set for the selected policy', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - RULE-SET,GlobalRules,DIRECT
+  - RULE-SET,StreamingA,Streaming
+  - RULE-SET,StreamingB,Streaming
+  - MATCH,DIRECT
+`,
+    {
+      value: 'new.example',
+      groupName: 'Streaming',
+      target: 'Streaming',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - RULE-SET,GlobalRules,DIRECT\n  - DOMAIN-SUFFIX,new\.example,Streaming\n  - RULE-SET,StreamingA,Streaming\n  - RULE-SET,StreamingB,Streaming\n  - MATCH,DIRECT\n/,
+  )
+})
+
+test('proxy domain rule supports IP CIDR rule values', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - MATCH,DIRECT
+`,
+    {
+      value: '192.168.3.45/32',
+      type: 'SRC-IP-CIDR',
+      groupName: 'DIRECT',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(result.content, /rules:\n  - MATCH,DIRECT\n  - SRC-IP-CIDR,192\.168\.3\.45\/32,DIRECT\n/)
+})
+
+test('proxy domain rule can be inserted into pre custom rules', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - SRC-IP-CIDR,192.168.1.10/32,DIRECT
+  - RULE-SET,StreamingRules,Streaming
+  - MATCH,DIRECT
+`,
+    {
+      value: 'new.example',
+      target: 'REJECT',
+      customGroupMode: 'pre',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - SRC-IP-CIDR,192\.168\.1\.10\/32,DIRECT\n  - DOMAIN-SUFFIX,new\.example,REJECT\n  - RULE-SET,StreamingRules,Streaming\n  - MATCH,DIRECT\n/,
+  )
+})
+
+test('proxy domain rule can be inserted into post custom rules', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting(
+    `rules:
+  - RULE-SET,StreamingRules,Streaming
+  - RULE-SET,AppleRules,DIRECT
+  - DOMAIN-SUFFIX,old.example,DIRECT
+`,
+    {
+      value: 'new.example',
+      target: 'Node A',
+      customGroupMode: 'post',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.match(
+    result.content,
+    /rules:\n  - RULE-SET,StreamingRules,Streaming\n  - RULE-SET,AppleRules,DIRECT\n  - DOMAIN-SUFFIX,new\.example,Node A\n  - DOMAIN-SUFFIX,old\.example,DIRECT\n/,
+  )
+})
+
+test('remote proxy domain rule writes are limited to custom rule sections', () => {
+  assert.throws(
+    () =>
+      normalizeWritableProxyDomainRuleInputForTesting({
+        value: 'new.example',
+        groupName: 'Streaming',
+        target: 'Streaming',
+        providerName: 'StreamingRules',
+      }),
+    (error) => {
+      assert.equal(error.statusCode, 400)
+      assert.match(error.message, /only be added to custom rule sections/i)
+      return true
+    },
+  )
+
+  assert.deepEqual(
+    normalizeWritableProxyDomainRuleInputForTesting({
+      value: 'new.example',
+      groupName: 'Streaming',
+      target: 'DIRECT',
+      providerName: 'StreamingRules',
+      customGroupMode: 'pre',
+    }),
+    {
+      value: 'new.example',
+      groupName: '',
+      target: 'DIRECT',
+      providerName: '',
+      customGroupMode: 'pre',
+    },
+  )
+})
+
+test('OpenClash custom rule sections use the files shown by the OpenClash editor', () => {
+  const snapshot = {
+    plugin: 'openclash',
+    configPath: '/etc/openclash/config/current.yaml',
+  }
+
+  assert.equal(
+    getWritableProxyDomainRulePathForTesting(snapshot, 'pre'),
+    '/etc/openclash/custom/openclash_custom_rules.list',
+  )
+  assert.equal(
+    getWritableProxyDomainRulePathForTesting(snapshot, 'post'),
+    '/etc/openclash/custom/openclash_custom_rules_2.list',
+  )
+  assert.equal(
+    getWritableProxyDomainRulePathForTesting(
+      { plugin: 'nikki', configPath: '/etc/nikki/run/config.yaml' },
+      'pre',
+    ),
+    '/etc/nikki/run/config.yaml',
+  )
+})
+
+test('OpenClash custom rule files are parsed from the YAML rules array only', () => {
+  const entries = parseProxyDomainCustomRulesFromYamlContentForTesting(
+    `mixed-port: 7890
+rules:
+- DOMAIN-SUFFIX,baidu.com,DIRECT
+- SRC-IP-CIDR,10.0.0.0/24,DIRECT
+`,
+    'pre',
+    {
+      standalone: true,
+      source: '/etc/openclash/custom/openclash_custom_rules.list',
+    },
+  )
+
+  assert.deepEqual(
+    entries.map((entry) => entry.raw),
+    ['DOMAIN-SUFFIX,baidu.com,DIRECT', 'SRC-IP-CIDR,10.0.0.0/24,DIRECT'],
+  )
+  assert.deepEqual(
+    entries.map((entry) => entry.line),
+    [3, 4],
+  )
+})
+
+test('Nikki custom rules are split into pre and post sections around rule sets', () => {
+  const content = `rules:
+- DOMAIN,pre.example,DIRECT
+- RULE-SET,streaming,Proxy
+- DOMAIN,post.example,DIRECT
+`
+  const preEntries = parseProxyDomainCustomRulesFromYamlContentForTesting(content, 'pre')
+  const postEntries = parseProxyDomainCustomRulesFromYamlContentForTesting(content, 'post')
+
+  assert.deepEqual(preEntries.map((entry) => entry.raw), ['DOMAIN,pre.example,DIRECT'])
+  assert.deepEqual(postEntries.map((entry) => entry.raw), ['DOMAIN,post.example,DIRECT'])
+})
+
+test('custom rules can be reordered without removing comments or blank lines', () => {
+  const content = `rules:
+- DOMAIN-SUFFIX,first.example,DIRECT
+
+# keep this comment
+- DOMAIN-SUFFIX,second.example,Proxy
+- SRC-IP-CIDR,192.168.1.10/32,DIRECT
+`
+  const result = reorderProxyDomainRulesInYamlContentForTesting(content, [
+    'SRC-IP-CIDR,192.168.1.10/32,DIRECT',
+    'DOMAIN-SUFFIX,first.example,DIRECT',
+    'DOMAIN-SUFFIX,second.example,Proxy',
+  ])
+
+  assert.equal(result.changed, true)
+  assert.equal(result.count, 3)
+  assert.match(result.content, /# keep this comment/)
+  assert.match(
+    result.content,
+    /rules:\n- SRC-IP-CIDR,192\.168\.1\.10\/32,DIRECT\n\n# keep this comment\n- DOMAIN-SUFFIX,first\.example,DIRECT\n- DOMAIN-SUFFIX,second\.example,Proxy\n/,
+  )
+})
+
+test('custom rule reorder rejects incomplete filtered lists', () => {
+  assert.throws(
+    () =>
+      reorderProxyDomainRulesInYamlContentForTesting(
+        `rules:\n- DOMAIN,one.example,DIRECT\n- DOMAIN,two.example,DIRECT\n`,
+        ['DOMAIN,one.example,DIRECT'],
+      ),
+    (error) => {
+      assert.equal(error.statusCode, 400)
+      assert.match(error.message, /every enabled custom rule/i)
+      return true
+    },
+  )
+})
+
+test('custom rule can be edited without changing comments, blank lines, or order', () => {
+  const content = `rules:
+- DOMAIN-SUFFIX,first.example,DIRECT
+
+# keep this comment
+- DOMAIN-SUFFIX,second.example,Proxy
+`
+  const result = updateProxyDomainRuleInYamlContentForTesting(
+    content,
+    'DOMAIN-SUFFIX,second.example,Proxy',
+    {
+      type: 'DOMAIN',
+      value: 'updated.example',
+      target: 'DIRECT',
+    },
+  )
+
+  assert.equal(result.changed, true)
+  assert.equal(result.rule, 'DOMAIN,updated.example,DIRECT')
+  assert.equal(
+    result.content,
+    `rules:
+- DOMAIN-SUFFIX,first.example,DIRECT
+
+# keep this comment
+- DOMAIN,updated.example,DIRECT
+`,
+  )
+})
+
+test('custom rule edit rejects duplicate and missing original rules', () => {
+  const content = `rules:
+- DOMAIN,one.example,DIRECT
+- DOMAIN,two.example,DIRECT
+`
+
+  assert.throws(
+    () =>
+      updateProxyDomainRuleInYamlContentForTesting(content, 'DOMAIN,two.example,DIRECT', {
+        type: 'DOMAIN',
+        value: 'one.example',
+        target: 'DIRECT',
+      }),
+    /already exists/i,
+  )
+  assert.throws(
+    () =>
+      updateProxyDomainRuleInYamlContentForTesting(content, 'DOMAIN,missing.example,DIRECT', {
+        type: 'DOMAIN',
+        value: 'updated.example',
+        target: 'DIRECT',
+      }),
+    /was not found/i,
+  )
+})
+
+test('custom rule can be deleted without changing comments or other rules', () => {
+  const content = `rules:
+- DOMAIN,first.example,DIRECT
+
+# keep this comment
+- DOMAIN,delete.example,Proxy
+- DOMAIN,last.example,DIRECT
+`
+  const result = deleteProxyDomainRuleInYamlContentForTesting(
+    content,
+    'DOMAIN,delete.example,Proxy',
+  )
+
+  assert.equal(result.changed, true)
+  assert.equal(result.rule, 'DOMAIN,delete.example,Proxy')
+  assert.equal(
+    result.content,
+    `rules:
+- DOMAIN,first.example,DIRECT
+
+# keep this comment
+- DOMAIN,last.example,DIRECT
+`,
+  )
+})
+
+test('custom rule delete rejects a missing exact record', () => {
+  assert.throws(
+    () =>
+      deleteProxyDomainRuleInYamlContentForTesting(
+        `rules:\n- DOMAIN,example.com,DIRECT\n`,
+        'DOMAIN-SUFFIX,example.com,DIRECT',
+      ),
+    /was not found/i,
+  )
+})
+
+test('proxy domain rule duplicate does not rewrite YAML', () => {
+  const content = `rules:
+  - DOMAIN-SUFFIX,example.com,Streaming
+`
+  const result = addProxyDomainRuleToYamlContentForTesting(content, {
+    domain: 'example.com',
+    groupName: 'Streaming',
+  })
+
+  assert.equal(result.changed, false)
+  assert.equal(result.duplicated, true)
+  assert.equal(result.content, content)
 })

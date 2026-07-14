@@ -209,6 +209,8 @@
         v-model="backendList"
         group="list"
         :animation="150"
+        handle=".backend-drag-handle"
+        ghost-class="backend-drag-ghost"
         :item-key="'uuid'"
       >
         <template #item="{ element }">
@@ -216,23 +218,32 @@
             :key="element.uuid"
             class="flex items-center gap-2"
           >
-            <button class="btn btn-circle btn-ghost btn-sm">
-              <ChevronUpDownIcon class="h-4 w-4 cursor-grab" />
+            <button
+              type="button"
+              class="backend-drag-handle btn btn-circle btn-ghost btn-sm cursor-grab touch-none active:cursor-grabbing"
+              :title="$t('dragToSort')"
+              :aria-label="$t('dragToSort')"
+              @click.stop
+            >
+              <ChevronUpDownIcon class="h-4 w-4" />
             </button>
             <button
-              class="btn btn-sm flex-1"
+              type="button"
+              class="btn btn-sm flex-1 touch-manipulation"
               @click="selectBackend(element.uuid)"
             >
               {{ getLabelFromBackend(element) }}
             </button>
             <button
-              class="btn btn-circle btn-ghost btn-sm"
+              type="button"
+              class="btn btn-circle btn-ghost btn-sm touch-manipulation"
               @click="editBackend(element)"
             >
               <PencilIcon class="h-4 w-4" />
             </button>
             <button
-              class="btn btn-circle btn-ghost btn-sm"
+              type="button"
+              class="btn btn-circle btn-ghost btn-sm touch-manipulation"
               @click="() => removeBackend(element.uuid)"
             >
               <TrashIcon class="h-4 w-4" />
@@ -594,3 +605,9 @@ if (backend) {
   handleSubmit(form, true)
 }
 </script>
+
+<style scoped>
+.backend-drag-ghost {
+  opacity: 0.45;
+}
+</style>

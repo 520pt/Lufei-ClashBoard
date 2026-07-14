@@ -76,6 +76,43 @@ html.apple-mobile-ui {
   border-radius: var(--app-radius-field, 0.5rem) !important;
 }
 
+#app-content .btn-error:not(:disabled),
+#app-content .destructive-action:not(:disabled) {
+  cursor: pointer;
+}
+
+#app-content .btn-error:not(:disabled):hover,
+#app-content .btn-error:not(:disabled):active,
+#app-content .btn-error:not(:disabled):focus-visible,
+#app-content .destructive-action:not(:disabled):hover,
+#app-content .destructive-action:not(:disabled):active,
+#app-content .destructive-action:not(:disabled):focus-visible {
+  color: #fff !important;
+  background-color: var(--color-error) !important;
+}
+
+#app-content .pending-restart-dialog-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+#app-content .pending-restart-dialog-hint {
+  color: var(--color-error);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  text-align: left;
+}
+
+#app-content .pending-restart-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 #app-content .sidebar .menu li > * {
   border-radius: var(--app-radius-nav, 0.875rem) !important;
 }

@@ -1,29 +1,53 @@
 import { disconnectByIdAPI, isSingBox, updateProxyProviderAPI } from '@/api'
 import {
   domainGroupSearch,
+  domainGroupSelectedName,
   domainGroups,
+  domainRuleConfigChanged,
+  domainRulesReloadRevision,
   nodeGroups,
   policyGroups,
   renderGroups,
 } from '@/composables/proxies'
 import { useCtrlsBar } from '@/composables/useCtrlsBar'
-import { PROXY_SORT_TYPE, PROXY_TAB_TYPE, ROUTE_NAME, SETTINGS_MENU_KEY } from '@/constant'
+import {
+  NOT_CONNECTED,
+  PROXY_SORT_TYPE,
+  PROXY_TAB_TYPE,
+  ROUTE_NAME,
+  SETTINGS_MENU_KEY,
+} from '@/constant'
+import { getColorForLatency } from '@/helper'
+import { showNotification } from '@/helper/notification'
 import {
   buildProxyCategoryGroups,
   getProxyCategoryCollapseKey,
   isProxyCategoryEnabled,
 } from '@/helper/proxyCategory'
+import {
+  DOMAIN_GROUP_POST_CUSTOM_KEY,
+  DOMAIN_GROUP_PRE_CUSTOM_KEY,
+  isDomainGroupCustomKey,
+} from '@/helper/proxyDomainGroups'
 import { getMinCardWidth } from '@/helper/utils'
+import { fetchServerApi } from '@/store/auth'
 import { configs, updateConfigs } from '@/store/config'
 import { activeConnections } from '@/store/connections'
 import {
   allProxiesLatencyTest,
   fetchProxies,
+  getLatencyByName,
+  getTestUrl,
   hasSmartGroup,
   proxiesFilter,
   proxiesTabShow,
+  proxyGroupLatencyTest,
+  proxyLatencyTest,
+  proxyMap,
+  proxyNodesLatencyTest,
   proxyProviederList,
 } from '@/store/proxies'
+import { fetchRules } from '@/store/rules'
 import {
   automaticDisconnection,
   collapseGroupMap,
@@ -44,8 +68,10 @@ import {
 import {
   ArrowPathIcon,
   BoltIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  PlusIcon,
   WrenchScrewdriverIcon,
 } from '@heroicons/vue/24/outline'
 import { every } from 'lodash'
@@ -73,6 +99,21 @@ export default defineComponent({
     const isUpgrading = ref(false)
     const isAllLatencyTesting = ref(false)
     const settingsModel = ref(false)
+    const addDomainRuleModal = ref(false)
+    const isAddingDomainRule = ref(false)
+    const isRestartingProxy = ref(false)
+    const customRuleParamSearch = ref('')
+    const customRuleParamSort = ref<'default' | 'name-asc' | 'latency-asc' | 'latency-desc'>(
+      'default',
+    )
+    const isCustomRuleParamDropdownOpen = ref(false)
+    const customRuleParamTestingMap = ref<Record<string, boolean>>({})
+    const isCustomRuleParamTestingAll = ref(false)
+    const domainRuleForm = ref({
+      value: '',
+      param: 'DIRECT',
+      type: 'DOMAIN-SUFFIX',
+    })
     const { isLargeCtrlsBar } = useCtrlsBar()
 
     const handlerClickUpdateAllProviders = async () => {
@@ -118,6 +159,568 @@ export default defineComponent({
         isAllLatencyTesting.value = false
       } catch {
         isAllLatencyTesting.value = false
+      }
+    }
+
+    const selectedDomainGroupLabel = computed(() => {
+      if (domainGroupSelectedName.value === DOMAIN_GROUP_PRE_CUSTOM_KEY) {
+        return t('preCustom')
+      }
+
+      if (domainGroupSelectedName.value === DOMAIN_GROUP_POST_CUSTOM_KEY) {
+        return t('postCustom')
+      }
+
+      return domainGroupSelectedName.value
+    })
+
+    const isSelectedCustomDomainGroup = computed(() =>
+      isDomainGroupCustomKey(domainGroupSelectedName.value),
+    )
+    type CustomRuleParamOption = {
+      name: string
+      type: 'builtin' | 'group' | 'node'
+      index: number
+      latency: number
+      searchable: string
+    }
+    type DomainRuleValidationError = {
+      content: string
+      params: Record<string, string>
+    }
+    const proxyDirectRuleTypes = [
+      {
+        value: 'DOMAIN-SUFFIX',
+        label: t('ruleTypeDomainSuffix'),
+      },
+      {
+        value: 'DOMAIN',
+        label: t('ruleTypeDomain'),
+      },
+      {
+        value: 'DOMAIN-KEYWORD',
+        label: t('ruleTypeDomainKeyword'),
+      },
+      {
+        value: 'IP-CIDR',
+        label: t('ruleTypeDestinationIP'),
+      },
+      {
+        value: 'IP-CIDR6',
+        label: t('ruleTypeDestinationIPv6'),
+      },
+      {
+        value: 'SRC-IP-CIDR',
+        label: t('ruleTypeSourceIP'),
+      },
+      {
+        value: 'SRC-IP-CIDR6',
+        label: t('ruleTypeSourceIPv6'),
+      },
+    ]
+    const proxyIpRuleTypeSet = new Set(['IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'SRC-IP-CIDR6'])
+    const isIpDomainRuleType = computed(() => proxyIpRuleTypeSet.has(domainRuleForm.value.type))
+    const domainRuleValuePlaceholder = computed(() => {
+      if (domainRuleForm.value.type === 'IP-CIDR6') {
+        return '2001:db8::/32'
+      }
+
+      if (domainRuleForm.value.type === 'SRC-IP-CIDR6') {
+        return '2001:db8::1/128'
+      }
+
+      if (domainRuleForm.value.type === 'IP-CIDR') {
+        return '8.8.8.8/32'
+      }
+
+      if (domainRuleForm.value.type === 'SRC-IP-CIDR') {
+        return '192.168.1.10/32'
+      }
+
+      if (domainRuleForm.value.type === 'DOMAIN-KEYWORD') {
+        return 'keyword'
+      }
+
+      return 'example.com'
+    })
+    const customRuleParamOptions = computed(() => {
+      const options: CustomRuleParamOption[] = []
+      const seen = new Set<string>()
+      const append = (name: string, type: CustomRuleParamOption['type']) => {
+        const normalizedName = String(name || '').trim()
+
+        if (!normalizedName || seen.has(normalizedName)) {
+          return
+        }
+
+        seen.add(normalizedName)
+        options.push({
+          name: normalizedName,
+          type,
+          index: options.length,
+          latency:
+            type === 'builtin'
+              ? NOT_CONNECTED
+              : getLatencyByName(normalizedName, type === 'group' ? normalizedName : undefined),
+          searchable: normalizedName.toLowerCase(),
+        })
+      }
+
+      append('DIRECT', 'builtin')
+      append('REJECT', 'builtin')
+      nodeGroups.value.forEach((name) => append(name, 'group'))
+      Object.values(proxyMap.value).forEach((proxy) => {
+        if (!proxy?.all?.length) {
+          append(proxy.name, 'node')
+        }
+      })
+
+      return options
+    })
+    const filteredCustomRuleParamOptions = computed(() => {
+      const keywords = customRuleParamSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
+      const filteredOptions = keywords.length
+        ? customRuleParamOptions.value.filter((option) =>
+            keywords.every((keyword) => option.searchable.includes(keyword)),
+          )
+        : customRuleParamOptions.value
+
+      const builtins = filteredOptions.filter((option) => option.type === 'builtin')
+      const testableOptions = filteredOptions.filter((option) => option.type !== 'builtin')
+
+      const getLatencyForSort = (option: CustomRuleParamOption) =>
+        option.latency === NOT_CONNECTED ? Number.POSITIVE_INFINITY : option.latency
+
+      if (customRuleParamSort.value === 'name-asc') {
+        testableOptions.sort((left, right) =>
+          left.name.localeCompare(right.name, undefined, {
+            numeric: true,
+            sensitivity: 'base',
+          }),
+        )
+      } else if (customRuleParamSort.value === 'latency-asc') {
+        testableOptions.sort((left, right) => {
+          const latencyDiff = getLatencyForSort(left) - getLatencyForSort(right)
+
+          return latencyDiff || left.name.localeCompare(right.name)
+        })
+      } else if (customRuleParamSort.value === 'latency-desc') {
+        testableOptions.sort((left, right) => {
+          const leftLatency = getLatencyForSort(left)
+          const rightLatency = getLatencyForSort(right)
+
+          if (!Number.isFinite(leftLatency) && !Number.isFinite(rightLatency)) {
+            return left.name.localeCompare(right.name)
+          }
+
+          if (!Number.isFinite(leftLatency)) {
+            return 1
+          }
+
+          if (!Number.isFinite(rightLatency)) {
+            return -1
+          }
+
+          const latencyDiff = rightLatency - leftLatency
+
+          return latencyDiff || left.name.localeCompare(right.name)
+        })
+      } else {
+        testableOptions.sort((left, right) => left.index - right.index)
+      }
+
+      return [...builtins, ...testableOptions]
+    })
+    const selectedCustomRuleParamOption = computed(() =>
+      customRuleParamOptions.value.find((option) => option.name === domainRuleForm.value.param),
+    )
+    const customRuleParamTestableOptions = computed(() =>
+      filteredCustomRuleParamOptions.value.filter((option) => option.type !== 'builtin'),
+    )
+    const selectedCustomGroupMode = computed(() => {
+      if (domainGroupSelectedName.value === DOMAIN_GROUP_PRE_CUSTOM_KEY) {
+        return 'pre'
+      }
+
+      if (domainGroupSelectedName.value === DOMAIN_GROUP_POST_CUSTOM_KEY) {
+        return 'post'
+      }
+
+      return ''
+    })
+    const canAddDomainRule = computed(
+      () => isSelectedCustomDomainGroup.value && Boolean(selectedCustomGroupMode.value),
+    )
+    const getDomainRuleHostValue = (value: string) => {
+      const normalizedValue = value.trim()
+
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedValue)) {
+        try {
+          return new URL(normalizedValue).hostname.replace(/^\[(.*)\]$/, '$1')
+        } catch {
+          return normalizedValue
+        }
+      }
+
+      return normalizedValue.replace(/^\*\./, '').replace(/^\[(.*)\]$/, '$1')
+    }
+
+    const isValidIpv4Address = (value: string) => {
+      const parts = value.split('.')
+
+      return (
+        parts.length === 4 &&
+        parts.every((part) => {
+          if (!/^\d{1,3}$/.test(part)) {
+            return false
+          }
+
+          const number = Number(part)
+
+          return number >= 0 && number <= 255
+        })
+      )
+    }
+
+    const isValidIpv6Address = (value: string) => {
+      const normalizedValue = value.toLowerCase()
+
+      if (!normalizedValue.includes(':') || normalizedValue.includes(':::')) {
+        return false
+      }
+
+      const compressionMatches = normalizedValue.match(/::/g) || []
+
+      if (compressionMatches.length > 1) {
+        return false
+      }
+
+      const hasCompression = compressionMatches.length === 1
+      const [left = '', right = ''] = normalizedValue.split('::')
+      const leftParts = left ? left.split(':') : []
+      const rightParts = right ? right.split(':') : []
+      const parts = [...leftParts, ...rightParts]
+
+      if (parts.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) {
+        return false
+      }
+
+      return hasCompression ? parts.length < 8 : parts.length === 8
+    }
+
+    const parseRuleIpCidr = (value: string) => {
+      const normalizedValue = getDomainRuleHostValue(value)
+      const parts = normalizedValue.split('/')
+
+      if (parts.length > 2 || !parts[0]) {
+        return null
+      }
+
+      const version = isValidIpv4Address(parts[0]) ? 4 : isValidIpv6Address(parts[0]) ? 6 : 0
+
+      if (!version) {
+        return null
+      }
+
+      if (parts.length === 1) {
+        return { version }
+      }
+
+      if (!/^\d+$/.test(parts[1])) {
+        return null
+      }
+
+      const prefix = Number(parts[1])
+      const maxPrefix = version === 4 ? 32 : 128
+
+      return prefix >= 0 && prefix <= maxPrefix ? { version } : null
+    }
+
+    const isValidDomainRuleHost = (value: string) => {
+      const host = getDomainRuleHostValue(value).replace(/\.$/, '')
+
+      if (!host || host.length > 253 || /[/\\:[\]]/.test(host)) {
+        return false
+      }
+
+      return host.split('.').every((label) => {
+        return (
+          label.length > 0 &&
+          label.length <= 63 &&
+          /^[a-z0-9-]+$/i.test(label) &&
+          !label.startsWith('-') &&
+          !label.endsWith('-')
+        )
+      })
+    }
+
+    const validateDomainRuleForm = (): DomainRuleValidationError | null => {
+      const value = domainRuleForm.value.value.trim()
+
+      if (!value) {
+        return {
+          content: 'domainRuleInputRequired',
+          params: {},
+        }
+      }
+
+      if (/[\s,\r\n]/.test(value)) {
+        return {
+          content: 'domainRuleInputInvalidCharacters',
+          params: {},
+        }
+      }
+
+      const type = domainRuleForm.value.type
+      const parsedIp = parseRuleIpCidr(value)
+
+      if (proxyIpRuleTypeSet.has(type)) {
+        if (!parsedIp) {
+          return {
+            content: 'domainRuleIpInvalid',
+            params: {
+              example: type.includes('6') ? '2001:db8::/32' : '192.168.1.0/24',
+            },
+          }
+        }
+
+        if (!type.includes('6') && parsedIp.version !== 4) {
+          return {
+            content: 'domainRuleIpVersionMismatch',
+            params: {
+              version: 'IPv4',
+            },
+          }
+        }
+
+        if (type.includes('6') && parsedIp.version !== 6) {
+          return {
+            content: 'domainRuleIpVersionMismatch',
+            params: {
+              version: 'IPv6',
+            },
+          }
+        }
+
+        return null
+      }
+
+      if (parsedIp) {
+        return {
+          content: 'domainRuleDomainCannotBeIp',
+          params: {},
+        }
+      }
+
+      if (type !== 'DOMAIN-KEYWORD' && !isValidDomainRuleHost(value)) {
+        return {
+          content: 'domainRuleDomainInvalid',
+          params: {},
+        }
+      }
+
+      return null
+    }
+
+    const openAddDomainRuleModal = () => {
+      if (!canAddDomainRule.value) return
+      if (
+        isSelectedCustomDomainGroup.value &&
+        !customRuleParamOptions.value.some((option) => option.name === domainRuleForm.value.param)
+      ) {
+        domainRuleForm.value.param = 'DIRECT'
+      }
+      isCustomRuleParamDropdownOpen.value = false
+      addDomainRuleModal.value = true
+    }
+
+    const selectCustomRuleParam = (name: string) => {
+      domainRuleForm.value.param = name
+      isCustomRuleParamDropdownOpen.value = false
+    }
+
+    const isCustomRuleParamTesting = (name: string) =>
+      customRuleParamTestingMap.value[name] ?? false
+
+    const setCustomRuleParamTesting = (name: string, value: boolean) => {
+      customRuleParamTestingMap.value = {
+        ...customRuleParamTestingMap.value,
+        [name]: value,
+      }
+    }
+
+    const testCustomRuleParamOption = async (option: CustomRuleParamOption) => {
+      if (option.type === 'builtin' || isCustomRuleParamTesting(option.name)) return
+
+      setCustomRuleParamTesting(option.name, true)
+      try {
+        if (option.type === 'group') {
+          await proxyGroupLatencyTest(option.name)
+        } else {
+          await proxyLatencyTest(option.name, getTestUrl(option.name))
+        }
+      } catch {
+        // The existing API interceptor and latency helpers surface test failures.
+      } finally {
+        setCustomRuleParamTesting(option.name, false)
+      }
+    }
+
+    const testFilteredCustomRuleParams = async () => {
+      if (isCustomRuleParamTestingAll.value) return
+
+      const options = customRuleParamTestableOptions.value
+      if (options.length === 0) return
+
+      isCustomRuleParamTestingAll.value = true
+      options.forEach((option) => setCustomRuleParamTesting(option.name, true))
+
+      try {
+        const groups = options
+          .filter((option) => option.type === 'group')
+          .map((option) => option.name)
+        const nodes = options
+          .filter((option) => option.type === 'node')
+          .map((option) => option.name)
+
+        await Promise.allSettled([
+          ...groups.map((groupName) => proxyGroupLatencyTest(groupName)),
+          nodes.length
+            ? proxyNodesLatencyTest('domain-rule-param', nodes, {
+                displayName: t('params'),
+                keyName: `domain-rule-param-${customRuleParamSearch.value.trim() || 'all'}`,
+              })
+            : Promise.resolve(),
+        ])
+      } finally {
+        options.forEach((option) => setCustomRuleParamTesting(option.name, false))
+        isCustomRuleParamTestingAll.value = false
+      }
+    }
+
+    const restartProxyAndReloadDomainRules = async () => {
+      const response = await fetchServerApi('/api/proxy-domain-rules/reload', {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { message?: string } | null
+        throw new Error(data?.message || `Failed to reload proxy rules: ${response.status}`)
+      }
+
+      showNotification({
+        key: 'proxy-restart-progress',
+        content: 'restartProxyRefreshing',
+        type: 'alert-info',
+        timeout: 0,
+      })
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1000)
+      })
+      await Promise.all([fetchProxies(), fetchRules()])
+      domainRuleConfigChanged.value = false
+      domainRulesReloadRevision.value += 1
+    }
+
+    const submitAddDomainRule = async () => {
+      if (isAddingDomainRule.value || !canAddDomainRule.value) return
+      const validationError = validateDomainRuleForm()
+
+      if (validationError) {
+        showNotification({
+          key: 'domainRuleInputInvalid',
+          content: validationError.content,
+          params: validationError.params,
+          type: 'alert-error',
+        })
+        return
+      }
+
+      isAddingDomainRule.value = true
+
+      try {
+        const response = await fetchServerApi('/api/proxy-domain-rules', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            value: domainRuleForm.value.value,
+            target: domainRuleForm.value.param,
+            type: domainRuleForm.value.type,
+            customGroupMode: selectedCustomGroupMode.value,
+          }),
+        })
+        const data = (await response.json().catch(() => null)) as {
+          message?: string
+          changed?: boolean
+          duplicated?: boolean
+          rule?: string
+        } | null
+
+        if (!response.ok) {
+          throw new Error(data?.message || `Failed to add domain rule: ${response.status}`)
+        }
+
+        if (data?.changed) {
+          domainRuleConfigChanged.value = true
+          domainRulesReloadRevision.value += 1
+          domainRuleForm.value.value = ''
+          addDomainRuleModal.value = false
+          showNotification({
+            key: `domain-rule-added-${data.rule || Date.now()}`,
+            content: 'domainRuleAdded',
+            type: 'alert-warning',
+          })
+        } else if (data?.duplicated) {
+          showNotification({
+            key: `domain-rule-duplicated-${data.rule || domainRuleForm.value.value}`,
+            content: 'domainRuleDuplicated',
+            type: 'alert-info',
+          })
+          domainRuleForm.value.value = ''
+          addDomainRuleModal.value = false
+        }
+      } catch (error) {
+        console.error(error)
+        showNotification({
+          key: 'domainRuleAddFailed',
+          content: 'domainRuleAddFailed',
+          type: 'alert-error',
+        })
+      } finally {
+        isAddingDomainRule.value = false
+      }
+    }
+
+    const handlerClickRestartProxy = async () => {
+      if (isRestartingProxy.value || !domainRuleConfigChanged.value) return
+      isRestartingProxy.value = true
+      showNotification({
+        key: 'proxy-restart-progress',
+        content: 'restartProxyInProgress',
+        type: 'alert-info',
+        timeout: 0,
+      })
+
+      try {
+        await restartProxyAndReloadDomainRules()
+        showNotification({
+          key: 'proxy-restart-progress',
+          content: 'restartProxySuccess',
+          type: 'alert-success',
+        })
+      } catch (restartError) {
+        console.error(restartError)
+        showNotification({
+          key: 'proxy-restart-progress',
+          content: 'restartProxyFailed',
+          type: 'alert-error',
+          timeout: 5000,
+        })
+      } finally {
+        isRestartingProxy.value = false
       }
     }
 
@@ -360,6 +963,240 @@ export default defineComponent({
         />
       )
 
+      const addDomainRuleDialog = (
+        <DialogWrapper
+          v-model={addDomainRuleModal.value}
+          title={t('addDomainRule')}
+          boxClass="w-[min(32rem,calc(100vw-2rem))] max-w-none"
+          contentClass="overflow-visible!"
+        >
+          <form
+            class="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submitAddDomainRule()
+            }}
+          >
+            <div class="text-base-content/70 text-sm">
+              {t('addDomainRuleTarget', {
+                group: selectedDomainGroupLabel.value || '-',
+              })}
+            </div>
+
+            <label class="form-control gap-1">
+              <span class="label-text text-sm">{t('ruleType')}</span>
+              <select
+                class="select select-sm w-full"
+                v-model={domainRuleForm.value.type}
+              >
+                {proxyDirectRuleTypes.map((type) => (
+                  <option
+                    key={type.value}
+                    value={type.value}
+                  >
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label class="form-control gap-1">
+              <span class="label-text text-sm">
+                {isIpDomainRuleType.value ? t('ip') : t('domain')}
+              </span>
+              <TextInput
+                v-model={domainRuleForm.value.value}
+                placeholder={domainRuleValuePlaceholder.value}
+                clearable={true}
+              />
+            </label>
+
+            {isSelectedCustomDomainGroup.value && (
+              <div class="form-control gap-2">
+                <span class="label-text text-sm">{t('params')}</span>
+                <div class="relative">
+                  <button
+                    type="button"
+                    class={[
+                      'select select-sm flex w-full items-center justify-between gap-2 pr-9 text-left',
+                      isCustomRuleParamDropdownOpen.value && 'select-primary',
+                    ]}
+                    onClick={() =>
+                      (isCustomRuleParamDropdownOpen.value = !isCustomRuleParamDropdownOpen.value)
+                    }
+                  >
+                    <span class="min-w-0 flex-1 truncate">
+                      {selectedCustomRuleParamOption.value?.name || domainRuleForm.value.param}
+                    </span>
+                    <ChevronDownIcon
+                      class={[
+                        'h-4 w-4 shrink-0 transition-transform',
+                        isCustomRuleParamDropdownOpen.value && 'rotate-180',
+                      ]}
+                    />
+                  </button>
+
+                  {isCustomRuleParamDropdownOpen.value && (
+                    <div class="border-base-300 bg-base-100! absolute right-0 bottom-full left-0 z-[70] mb-2 rounded-md border [background-color:var(--color-base-100)] p-2 shadow-xl backdrop-blur-none!">
+                      <div class="flex min-w-0 items-center gap-2">
+                        <TextInput
+                          class="min-w-0 flex-1"
+                          v-model={customRuleParamSearch.value}
+                          placeholder={t('search')}
+                          clearable={true}
+                        />
+                        <select
+                          class="select select-sm w-34 shrink-0"
+                          v-model={customRuleParamSort.value}
+                        >
+                          <option value="default">{t('defaultsort')}</option>
+                          <option value="name-asc">{t('nameasc')}</option>
+                          <option value="latency-asc">{t('latencyasc')}</option>
+                          <option value="latency-desc">{t('latencydesc')}</option>
+                        </select>
+                        <button
+                          type="button"
+                          class="btn btn-circle btn-sm shrink-0"
+                          disabled={
+                            isCustomRuleParamTestingAll.value ||
+                            customRuleParamTestableOptions.value.length === 0
+                          }
+                          onClick={testFilteredCustomRuleParams}
+                          title={t('latency')}
+                        >
+                          {isCustomRuleParamTestingAll.value ? (
+                            <span class="loading loading-spinner loading-sm"></span>
+                          ) : (
+                            <BoltIcon class="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+
+                      <div class="border-base-300/70 bg-base-100! mt-2 max-h-48 overflow-y-auto rounded-md border [background-color:var(--color-base-100)] backdrop-blur-none!">
+                        {filteredCustomRuleParamOptions.value.length === 0 ? (
+                          <div class="text-base-content/60 flex h-16 items-center justify-center text-sm">
+                            {t('noData')}
+                          </div>
+                        ) : (
+                          filteredCustomRuleParamOptions.value.map((option) => {
+                            const selected = domainRuleForm.value.param === option.name
+                            const testable = option.type !== 'builtin'
+                            const latencyVisible = testable && option.latency !== NOT_CONNECTED
+
+                            return (
+                              <div
+                                key={`${option.type}:${option.name}`}
+                                class={[
+                                  'hover:bg-base-200 flex min-h-10 items-center gap-2 px-3 py-2 text-sm transition-colors',
+                                  selected && 'bg-primary/10',
+                                ]}
+                              >
+                                <button
+                                  type="button"
+                                  class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                  onClick={() => selectCustomRuleParam(option.name)}
+                                >
+                                  <span class="h-4 w-4 shrink-0">
+                                    {selected && <CheckIcon class="h-4 w-4" />}
+                                  </span>
+                                  <span class="min-w-0 flex-1 truncate">{option.name}</span>
+                                  {testable && (
+                                    <span class="text-base-content/45 shrink-0 text-xs">
+                                      {option.type === 'group'
+                                        ? t('proxyParamGroup')
+                                        : t('proxyParamNode')}
+                                    </span>
+                                  )}
+                                </button>
+                                {testable && (
+                                  <button
+                                    type="button"
+                                    class={[
+                                      'btn btn-ghost btn-xs h-7 min-h-7 w-16 shrink-0 px-1',
+                                      latencyVisible && getColorForLatency(option.latency),
+                                    ]}
+                                    disabled={isCustomRuleParamTesting(option.name)}
+                                    onClick={() => void testCustomRuleParamOption(option)}
+                                    title={t('latency')}
+                                  >
+                                    {isCustomRuleParamTesting(option.name) ? (
+                                      <span class="loading loading-dots loading-xs"></span>
+                                    ) : latencyVisible ? (
+                                      `${option.latency}ms`
+                                    ) : (
+                                      <BoltIcon class="h-4 w-4" />
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div class="pending-restart-dialog-footer modal-action mt-1">
+              <p class="pending-restart-dialog-hint">{t('addDomainRuleHint')}</p>
+              <div class="pending-restart-dialog-actions">
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  onClick={() => (addDomainRuleModal.value = false)}
+                >
+                  {t('cancel')}
+                </button>
+                <button
+                  type="submit"
+                  class="btn btn-primary btn-sm"
+                  disabled={isAddingDomainRule.value || !domainRuleForm.value.value.trim()}
+                >
+                  {isAddingDomainRule.value && (
+                    <span class="loading loading-spinner loading-sm"></span>
+                  )}
+                  {t('confirm')}
+                </button>
+              </div>
+            </div>
+          </form>
+        </DialogWrapper>
+      )
+
+      const domainActions = (
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            class={[
+              'btn btn-circle btn-sm',
+              canAddDomainRule.value ? 'btn-primary' : 'btn-disabled',
+            ]}
+            disabled={!canAddDomainRule.value}
+            aria-disabled={!canAddDomainRule.value}
+            onClick={openAddDomainRuleModal}
+            title={canAddDomainRule.value ? t('addDomainRule') : t('addDomainRuleUnavailable')}
+          >
+            <PlusIcon class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            class="btn btn-circle btn-sm"
+            disabled={!domainRuleConfigChanged.value || isRestartingProxy.value}
+            onClick={handlerClickRestartProxy}
+            title={t('restartProxy')}
+          >
+            {isRestartingProxy.value ? (
+              <span class="loading loading-spinner loading-sm"></span>
+            ) : (
+              <ArrowPathIcon class="h-4 w-4" />
+            )}
+          </button>
+          {addDomainRuleDialog}
+        </div>
+      )
+
       const settingsModal = (
         <>
           <button
@@ -469,6 +1306,7 @@ export default defineComponent({
               <div class="proxy-domain-search-row flex w-full min-w-0 items-center gap-2 md:w-auto md:flex-1">
                 {domainSearchInput}
               </div>
+              {domainActions}
             </div>
           </div>
         )

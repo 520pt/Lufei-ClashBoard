@@ -126,12 +126,14 @@ const fallbackPolicyGroupNames = computed(() => {
 
 const resolvedPolicyGroupNames = computed(() => {
   const currentGroupSet = getCurrentGroupSet()
-  const directRulePolicyGroups = [...ruleProxyNames.value].filter((name) => currentGroupSet.has(name))
+  const directRulePolicyGroups = [...ruleProxyNames.value].filter((name) =>
+    currentGroupSet.has(name),
+  )
 
   if (directRulePolicyGroups.length > 0) {
     const topLevelRulePolicyGroups = directRulePolicyGroups.filter((name) => {
-      return !directRulePolicyGroups.some((candidate) =>
-        candidate !== name && hasDescendantGroup(candidate, name, currentGroupSet),
+      return !directRulePolicyGroups.some(
+        (candidate) => candidate !== name && hasDescendantGroup(candidate, name, currentGroupSet),
       )
     })
 
@@ -152,12 +154,18 @@ export const isProxiesPageMounted = ref(false)
 export const domainGroupSelectedName = ref('')
 export const domainGroupSelectedProvider = ref('')
 export const domainGroupSearch = ref('')
-export const policyGroups = computed(() => getCurrentProxyGroups().filter((name) => isPolicyGroup(name)))
+export const domainRuleConfigChanged = ref(false)
+export const domainRulesReloadRevision = ref(0)
+export const policyGroups = computed(() =>
+  getCurrentProxyGroups().filter((name) => isPolicyGroup(name)),
+)
 export const domainGroups = computed(() => getDomainGroupNames(rules.value, policyGroups.value))
 export const domainGroupProviderNames = computed(() =>
   getDomainGroupRuleSetOptions(domainGroupSelectedName.value, rules.value),
 )
-export const nodeGroups = computed(() => getCurrentProxyGroups().filter((name) => !isPolicyGroup(name)))
+export const nodeGroups = computed(() =>
+  getCurrentProxyGroups().filter((name) => !isPolicyGroup(name)),
+)
 export const nodeGroupBlocks = computed(() => {
   const groups = nodeGroups.value
   const groupSet = new Set(groups)

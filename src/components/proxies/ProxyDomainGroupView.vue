@@ -130,7 +130,7 @@
           </template>
           <template v-else>
             <table
-              class="domain-penetration-table table table-sm table-pin-rows table-auto w-max min-w-full rounded-none select-text"
+              class="domain-penetration-table table-sm table-pin-rows table w-max min-w-full table-auto rounded-none select-text"
             >
               <thead class="bg-base-100 sticky top-0 z-10">
                 <tr>
@@ -140,11 +140,13 @@
                     class="bg-base-100 whitespace-nowrap select-none"
                     :class="column.width"
                   >
+                    <span v-if="!column.sortable">{{ column.label }}</span>
                     <button
+                      v-else
                       type="button"
                       class="flex items-center gap-1 text-left"
-                      :class="column.sortable && 'cursor-pointer'"
-                      @click="column.sortable && toggleSort(column.key)"
+                      :class="'cursor-pointer'"
+                      @click="toggleColumnSort(column)"
                     >
                       <span>{{ column.label }}</span>
                       <ArrowUpCircleIcon
@@ -159,39 +161,94 @@
                   </th>
                 </tr>
               </thead>
-              <tbody>
-                <tr
-                  v-for="(item, index) in entries"
-                  :key="`${item.type}-${item.content}-${item.params}-${item.raw}-${index}`"
-                  class="h-9 hover:bg-primary! hover:text-primary-content"
-                  :class="[index % 2 === 0 ? 'bg-base-100' : 'bg-base-200', 'select-text']"
-                >
-                  <td
-                    :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
-                    class="h-9 cursor-text align-middle py-0 text-sm font-medium whitespace-nowrap select-text"
+              <Draggable
+                v-model="entries"
+                tag="tbody"
+                :item-key="getEntryDragKey"
+                handle=".domain-rule-drag-handle"
+                ghost-class="domain-rule-drag-ghost"
+                chosen-class="domain-rule-drag-chosen"
+                :animation="150"
+                :disabled="!canReorderCustomRules"
+                @start="handleDragStart"
+                @end="handleDragEnd"
+              >
+                <template #item="{ element: item, index }">
+                  <tr
+                    class="domain-rule-row hover:bg-primary! hover:text-primary-content h-9"
+                    :class="[
+                      index % 2 === 0 ? 'bg-base-100' : 'bg-base-200',
+                      'select-text',
+                      isEditableCustomRule(item) && 'domain-rule-editable-row',
+                    ]"
+                    :tabindex="isEditableCustomRule(item) ? 0 : undefined"
+                    :title="isEditableCustomRule(item) ? $t('customRuleClickToEdit') : undefined"
+                    @click="openEditRule(item)"
+                    @keydown.enter.prevent="openEditRule(item)"
                   >
-                    {{ getTypeLabel(item.type) }}
-                  </td>
-                  <td
-                    :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
-                    class="h-9 cursor-text align-middle py-0 text-sm whitespace-nowrap select-text"
-                  >
-                    {{ item.content || '-' }}
-                  </td>
-                  <td
-                    :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
-                    class="h-9 cursor-text align-middle py-0 text-sm whitespace-nowrap select-text"
-                  >
-                    {{ item.params || '-' }}
-                  </td>
-                  <td
-                    :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
-                    class="text-base-content/75 h-9 cursor-text align-middle py-0 font-mono text-sm whitespace-nowrap select-text"
-                  >
-                    {{ item.raw }}
-                  </td>
-                </tr>
-              </tbody>
+                    <td
+                      v-if="isSelectedCustomGroup"
+                      :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
+                      class="h-9 w-10 py-0 text-center align-middle select-none"
+                    >
+                      <button
+                        type="button"
+                        class="domain-rule-drag-handle text-base-content/40 hover:text-base-content hover:bg-base-300/60 inline-flex h-7 w-7 items-center justify-center rounded-md transition"
+                        :class="
+                          canReorderCustomRules
+                            ? 'cursor-grab active:cursor-grabbing'
+                            : 'cursor-not-allowed opacity-35'
+                        "
+                        :disabled="!canReorderCustomRules"
+                        :title="
+                          canReorderCustomRules
+                            ? $t('customRuleDragHandle')
+                            : $t('customRuleDragUnavailable')
+                        "
+                        :aria-label="$t('customRuleDragHandle')"
+                        @click.stop
+                      >
+                        <Bars3Icon class="h-4 w-4" />
+                      </button>
+                    </td>
+                    <td
+                      :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
+                      class="h-9 cursor-text py-0 align-middle text-sm font-medium whitespace-nowrap select-text"
+                    >
+                      {{ getTypeLabel(item.type) }}
+                    </td>
+                    <td
+                      :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
+                      class="h-9 cursor-text py-0 align-middle text-sm whitespace-nowrap select-text"
+                    >
+                      {{ item.content || '-' }}
+                    </td>
+                    <td
+                      :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
+                      class="h-9 cursor-text py-0 align-middle text-sm whitespace-nowrap select-text"
+                    >
+                      {{ item.params || '-' }}
+                    </td>
+                    <td
+                      :class="index % 2 === 0 ? 'bg-base-100' : 'bg-base-200'"
+                      class="text-base-content/75 relative h-9 cursor-text py-0 pr-10 align-middle font-mono text-sm whitespace-nowrap select-text"
+                    >
+                      {{ item.raw }}
+                      <button
+                        v-if="isDeletableCustomRule()"
+                        type="button"
+                        class="custom-rule-delete-button destructive-action text-error bg-base-100/85 absolute top-1/2 right-1 inline-flex h-7 w-7 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md shadow-sm transition"
+                        :title="$t('deleteCustomRule')"
+                        :aria-label="$t('deleteCustomRule')"
+                        @pointerdown.stop
+                        @click.stop="requestDeleteRule(item)"
+                      >
+                        <XMarkIcon class="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </Draggable>
             </table>
 
             <div
@@ -204,18 +261,161 @@
         </div>
       </div>
     </div>
+
+    <DialogWrapper
+      v-model="editRuleDialogOpen"
+      :title="$t('editCustomRule')"
+      box-class="w-[min(32rem,calc(100vw-2rem))] max-w-none"
+    >
+      <form
+        class="flex flex-col gap-4"
+        @submit.prevent="submitEditRule"
+      >
+        <div class="text-base-content/70 text-sm">
+          {{
+            $t('addDomainRuleTarget', {
+              group: selectedGroupItem?.label || '-',
+            })
+          }}
+        </div>
+
+        <label class="form-control gap-1">
+          <span class="label-text text-sm">{{ $t('ruleType') }}</span>
+          <select
+            v-model="editRuleForm.type"
+            class="select select-sm w-full"
+          >
+            <option
+              v-for="option in editableRuleTypeOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <label class="form-control gap-1">
+          <span class="label-text text-sm">
+            {{ isEditRuleIpType ? $t('ip') : $t('domain') }}
+          </span>
+          <input
+            v-model="editRuleForm.value"
+            type="text"
+            class="input input-sm w-full"
+            :placeholder="editRuleValuePlaceholder"
+            autocomplete="off"
+          />
+        </label>
+
+        <label class="form-control gap-1">
+          <span class="label-text text-sm">{{ $t('params') }}</span>
+          <input
+            v-model="editRuleForm.param"
+            type="text"
+            class="input input-sm w-full"
+            placeholder="DIRECT"
+            autocomplete="off"
+          />
+        </label>
+
+        <div class="pending-restart-dialog-footer modal-action mt-1">
+          <p class="pending-restart-dialog-hint">
+            {{ $t('editCustomRuleHint') }}
+          </p>
+          <div class="pending-restart-dialog-actions">
+            <button
+              type="button"
+              class="btn btn-sm"
+              :disabled="isSavingEditRule"
+              @click="editRuleDialogOpen = false"
+            >
+              {{ $t('cancel') }}
+            </button>
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm"
+              :disabled="
+                isSavingEditRule || !editRuleForm.value.trim() || !editRuleForm.param.trim()
+              "
+            >
+              <span
+                v-if="isSavingEditRule"
+                class="loading loading-spinner loading-sm"
+              />
+              {{ $t('save') }}
+            </button>
+          </div>
+        </div>
+      </form>
+    </DialogWrapper>
+
+    <DialogWrapper
+      v-model="deleteRuleDialogOpen"
+      :title="$t('deleteCustomRule')"
+      box-class="w-[min(32rem,calc(100vw-2rem))] max-w-none"
+    >
+      <div class="flex flex-col gap-4">
+        <div class="text-base-content/70 text-sm">
+          {{
+            $t('addDomainRuleTarget', {
+              group: selectedGroupItem?.label || '-',
+            })
+          }}
+        </div>
+        <p class="break-all whitespace-pre-wrap">
+          {{
+            $t('confirmDeleteCustomRule', {
+              record: deletingEntry?.raw || '-',
+            })
+          }}
+        </p>
+
+        <div class="pending-restart-dialog-footer modal-action mt-1">
+          <p class="pending-restart-dialog-hint">
+            {{ $t('deleteCustomRuleHint') }}
+          </p>
+          <div class="pending-restart-dialog-actions">
+            <button
+              type="button"
+              class="btn btn-sm"
+              :disabled="isDeletingRule"
+              @click="deleteRuleDialogOpen = false"
+            >
+              {{ $t('cancel') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-error btn-sm"
+              :disabled="isDeletingRule"
+              @click="confirmDeleteRule"
+            >
+              <span
+                v-if="isDeletingRule"
+                class="loading loading-spinner loading-sm"
+              />
+              {{ $t('deleteAction') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </DialogWrapper>
   </div>
 </template>
 
 <script setup lang="ts">
+import DialogWrapper from '@/components/common/DialogWrapper.vue'
 import {
   disableProxiesPageScroll,
   domainGroupProviderNames,
+  domainGroups,
   domainGroupSearch,
   domainGroupSelectedName,
   domainGroupSelectedProvider,
-  domainGroups,
+  domainRuleConfigChanged,
+  domainRulesReloadRevision,
 } from '@/composables/proxies'
+import { showNotification } from '@/helper/notification'
 import {
   DOMAIN_GROUP_CUSTOM_SOURCE,
   DOMAIN_GROUP_POST_CUSTOM_KEY,
@@ -231,9 +431,16 @@ import type {
 } from '@/store/proxyGroupRulePenetration'
 import { fetchRules, rules } from '@/store/rules'
 import type { Rule } from '@/types'
-import { ArrowDownCircleIcon, ArrowUpCircleIcon, QueueListIcon } from '@heroicons/vue/24/outline'
+import {
+  ArrowDownCircleIcon,
+  ArrowUpCircleIcon,
+  Bars3Icon,
+  QueueListIcon,
+  XMarkIcon,
+} from '@heroicons/vue/24/outline'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import Draggable from 'vuedraggable'
 import ProxyIcon from './ProxyIcon.vue'
 
 type GroupTabValue = Exclude<ProxyGroupRulePenetrationFamily, 'other'>
@@ -243,6 +450,18 @@ type FamilyTabItem = {
   count: number
   disabled: boolean
   displayLabel: string
+}
+
+type DomainRuleColumn = {
+  key: 'drag' | ProxyGroupRulePenetrationSortKey
+  label: string
+  width: string
+  sortable: boolean
+}
+
+type DragEndEvent = {
+  oldIndex?: number
+  newIndex?: number
 }
 
 type DomainGroupResponse = {
@@ -273,6 +492,23 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
 const entries = ref<ProxyGroupRulePenetrationEntry[]>([])
+const dragSnapshot = ref<ProxyGroupRulePenetrationEntry[]>([])
+const isReordering = ref(false)
+const suppressRowClick = ref(false)
+const editRuleDialogOpen = ref(false)
+const isSavingEditRule = ref(false)
+const editingEntry = ref<ProxyGroupRulePenetrationEntry | null>(null)
+const deleteRuleDialogOpen = ref(false)
+const isDeletingRule = ref(false)
+const deletingEntry = ref<ProxyGroupRulePenetrationEntry | null>(null)
+const deletingCustomGroupMode = ref('')
+const editRuleForm = ref({
+  type: 'DOMAIN-SUFFIX',
+  value: '',
+  param: 'DIRECT',
+  originalRule: '',
+  customGroupMode: '',
+})
 const missingProviders = ref<string[]>([])
 const counts = ref({
   all: 0,
@@ -323,13 +559,61 @@ const ruleTypeLabelKeyMap: Record<string, string> = {
   FINAL: 'ruleTypeFinal',
 }
 
-const columns = computed(() => {
+const editableRuleTypes = new Set([
+  'DOMAIN-SUFFIX',
+  'DOMAIN',
+  'DOMAIN-KEYWORD',
+  'IP-CIDR',
+  'IP-CIDR6',
+  'SRC-IP-CIDR',
+  'SRC-IP-CIDR6',
+])
+const editableIpRuleTypes = new Set(['IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'SRC-IP-CIDR6'])
+const editableRuleTypeOptions = computed(() => [
+  { value: 'DOMAIN-SUFFIX', label: t('ruleTypeDomainSuffix') },
+  { value: 'DOMAIN', label: t('ruleTypeDomain') },
+  { value: 'DOMAIN-KEYWORD', label: t('ruleTypeDomainKeyword') },
+  { value: 'IP-CIDR', label: t('ruleTypeDestinationIP') },
+  { value: 'IP-CIDR6', label: t('ruleTypeDestinationIPv6') },
+  { value: 'SRC-IP-CIDR', label: t('ruleTypeSourceIP') },
+  { value: 'SRC-IP-CIDR6', label: t('ruleTypeSourceIPv6') },
+])
+const isEditRuleIpType = computed(() => editableIpRuleTypes.has(editRuleForm.value.type))
+const editRuleValuePlaceholder = computed(() => {
+  if (editRuleForm.value.type === 'IP-CIDR6') return '2001:db8::/32'
+  if (editRuleForm.value.type === 'SRC-IP-CIDR6') return '2001:db8::1/128'
+  if (editRuleForm.value.type === 'IP-CIDR') return '8.8.8.8/32'
+  if (editRuleForm.value.type === 'SRC-IP-CIDR') return '192.168.1.10/32'
+  if (editRuleForm.value.type === 'DOMAIN-KEYWORD') return 'keyword'
+  return 'example.com'
+})
+
+const isSelectedCustomGroup = computed(() => isDomainGroupCustomKey(selectedGroupName.value))
+
+const columns = computed<DomainRuleColumn[]>(() => {
   return [
+    ...(isSelectedCustomGroup.value
+      ? [{ key: 'drag' as const, label: '', width: 'w-10', sortable: false }]
+      : []),
     { key: 'type', label: t('category'), width: 'w-22 md:w-32', sortable: true },
     { key: 'content', label: t('content'), width: 'w-34 md:w-72', sortable: true },
     { key: 'params', label: t('params'), width: 'w-24 md:w-36', sortable: true },
     { key: 'raw', label: t('rawContent'), width: 'w-52 md:w-auto', sortable: true },
-  ] as const
+  ]
+})
+
+const canReorderCustomRules = computed(() => {
+  return (
+    isSelectedCustomGroup.value &&
+    selectedFamily.value === 'all' &&
+    !selectedProvider.value &&
+    !search.value.trim() &&
+    sortKey.value === null &&
+    !loading.value &&
+    !loadingMore.value &&
+    !hasMore.value &&
+    !isReordering.value
+  )
 })
 
 const resetSortState = () => {
@@ -461,6 +745,221 @@ const getTypeLabel = (type: string) => {
   return t(ruleTypeLabelKeyMap[type] || 'ruleTypeOther')
 }
 
+const getEntryDragKey = (item: ProxyGroupRulePenetrationEntry) =>
+  `${item.source}\u0000${item.line ?? ''}\u0000${item.raw}`
+
+const isEditableCustomRule = (item: ProxyGroupRulePenetrationEntry) =>
+  isSelectedCustomGroup.value && editableRuleTypes.has(item.type)
+
+const isDeletableCustomRule = () => isSelectedCustomGroup.value
+
+const openEditRule = (item: ProxyGroupRulePenetrationEntry) => {
+  if (
+    suppressRowClick.value ||
+    isReordering.value ||
+    isSavingEditRule.value ||
+    !isEditableCustomRule(item)
+  ) {
+    return
+  }
+
+  const [type, value, ...paramParts] = item.raw.split(',').map((part) => part.trim())
+  const customGroupMode = getCustomGroupMode(selectedGroupName.value)
+
+  if (!editableRuleTypes.has(type) || !value || !paramParts.length || !customGroupMode) {
+    return
+  }
+
+  editingEntry.value = item
+  editRuleForm.value = {
+    type,
+    value,
+    param: paramParts.join(','),
+    originalRule: item.raw,
+    customGroupMode,
+  }
+  editRuleDialogOpen.value = true
+}
+
+const getEditedRuleFamily = (type: string): ProxyGroupRulePenetrationEntry['family'] => {
+  if (type.startsWith('DOMAIN')) return 'domain'
+  if (type.includes('IP')) return 'ip'
+  return 'other'
+}
+
+const submitEditRule = async () => {
+  if (
+    isSavingEditRule.value ||
+    !editingEntry.value ||
+    !editRuleForm.value.value.trim() ||
+    !editRuleForm.value.param.trim()
+  ) {
+    return
+  }
+
+  isSavingEditRule.value = true
+
+  try {
+    const response = await fetchServerApi('/api/proxy-domain-rules', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        originalRule: editRuleForm.value.originalRule,
+        customGroupMode: editRuleForm.value.customGroupMode,
+        type: editRuleForm.value.type,
+        value: editRuleForm.value.value,
+        target: editRuleForm.value.param,
+      }),
+    })
+    const data = (await response.json().catch(() => null)) as {
+      message?: string
+      changed?: boolean
+      rule?: string
+    } | null
+
+    if (!response.ok || !data?.rule) {
+      throw new Error(data?.message || `Failed to update custom rule: ${response.status}`)
+    }
+
+    const currentEntry = editingEntry.value
+    const entryIndex = entries.value.findIndex(
+      (item) => item === currentEntry || item.raw === editRuleForm.value.originalRule,
+    )
+    const [type, value, ...paramParts] = data.rule.split(',').map((part) => part.trim())
+    const nextFamily = getEditedRuleFamily(type)
+
+    if (entryIndex >= 0) {
+      entries.value[entryIndex] = {
+        ...currentEntry,
+        type,
+        family: nextFamily,
+        content: value,
+        params: paramParts.join(','),
+        raw: data.rule,
+      }
+    }
+
+    if (currentEntry.family !== nextFamily) {
+      if (currentEntry.family === 'domain')
+        counts.value.domain = Math.max(0, counts.value.domain - 1)
+      if (currentEntry.family === 'ip') counts.value.ip = Math.max(0, counts.value.ip - 1)
+      if (currentEntry.family === 'port') counts.value.port = Math.max(0, counts.value.port - 1)
+      if (nextFamily === 'domain') counts.value.domain += 1
+      if (nextFamily === 'ip') counts.value.ip += 1
+      if (nextFamily === 'port') counts.value.port += 1
+
+      if (
+        selectedFamily.value !== 'all' &&
+        selectedFamily.value !== nextFamily &&
+        entryIndex >= 0
+      ) {
+        entries.value.splice(entryIndex, 1)
+      }
+    }
+
+    if (data.changed) {
+      domainRuleConfigChanged.value = true
+      cacheKey.value = ''
+    }
+
+    editRuleDialogOpen.value = false
+    showNotification({
+      key: 'custom-rule-updated',
+      content: 'customRuleUpdated',
+      type: 'alert-success',
+    })
+  } catch (updateError) {
+    console.error(updateError)
+    showNotification({
+      key: 'custom-rule-update-failed',
+      content: 'customRuleUpdateFailed',
+      type: 'alert-error',
+    })
+  } finally {
+    isSavingEditRule.value = false
+  }
+}
+
+const requestDeleteRule = (item: ProxyGroupRulePenetrationEntry) => {
+  const customGroupMode = getCustomGroupMode(selectedGroupName.value)
+
+  if (!isDeletableCustomRule() || !customGroupMode || isDeletingRule.value) {
+    return
+  }
+
+  deletingEntry.value = item
+  deletingCustomGroupMode.value = customGroupMode
+  deleteRuleDialogOpen.value = true
+}
+
+const confirmDeleteRule = async () => {
+  if (isDeletingRule.value || !deletingEntry.value || !deletingCustomGroupMode.value) {
+    return
+  }
+
+  isDeletingRule.value = true
+  const targetEntry = deletingEntry.value
+
+  try {
+    const response = await fetchServerApi('/api/proxy-domain-rules', {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        customGroupMode: deletingCustomGroupMode.value,
+        rule: targetEntry.raw,
+      }),
+    })
+    const data = (await response.json().catch(() => null)) as {
+      message?: string
+      changed?: boolean
+      rule?: string
+    } | null
+
+    if (!response.ok || !data?.changed) {
+      throw new Error(data?.message || `Failed to delete custom rule: ${response.status}`)
+    }
+
+    const entryIndex = entries.value.findIndex(
+      (item) => item === targetEntry || item.raw === targetEntry.raw,
+    )
+
+    if (entryIndex >= 0) {
+      entries.value.splice(entryIndex, 1)
+    }
+
+    counts.value.all = Math.max(0, counts.value.all - 1)
+    if (targetEntry.family === 'domain') {
+      counts.value.domain = Math.max(0, counts.value.domain - 1)
+    } else if (targetEntry.family === 'ip') {
+      counts.value.ip = Math.max(0, counts.value.ip - 1)
+    } else if (targetEntry.family === 'port') {
+      counts.value.port = Math.max(0, counts.value.port - 1)
+    }
+
+    domainRuleConfigChanged.value = true
+    cacheKey.value = ''
+    deleteRuleDialogOpen.value = false
+    showNotification({
+      key: 'custom-rule-deleted',
+      content: 'customRuleDeleted',
+      type: 'alert-success',
+    })
+  } catch (deleteError) {
+    console.error(deleteError)
+    showNotification({
+      key: 'custom-rule-delete-failed',
+      content: 'customRuleDeleteFailed',
+      type: 'alert-error',
+    })
+  } finally {
+    isDeletingRule.value = false
+  }
+}
+
 const resetListState = () => {
   entries.value = []
   missingProviders.value = []
@@ -485,12 +984,16 @@ const buildRequestBody = (targetPage: number) => {
     providerName:
       selectedProvider.value === DOMAIN_GROUP_CUSTOM_SOURCE ? 'controller' : selectedProvider.value,
     page: targetPage,
-    pageSize: PAGE_SIZE,
+    pageSize: customGroupMode ? 500 : PAGE_SIZE,
     tab: selectedFamily.value,
     search: search.value.trim(),
     sortKey: sortKey.value,
     sortDirection: sortDirection.value,
-    ...(cacheKey.value ? { cacheKey: cacheKey.value } : { rules: serializeRules(rules.value) }),
+    ...(customGroupMode
+      ? {}
+      : cacheKey.value
+        ? { cacheKey: cacheKey.value }
+        : { rules: serializeRules(rules.value) }),
   }
 }
 
@@ -588,7 +1091,7 @@ const loadEntries = async (options?: { append?: boolean }) => {
       return
     }
 
-    cacheKey.value = data.cacheKey || cacheKey.value
+    cacheKey.value = isSelectedCustomGroup.value ? '' : data.cacheKey || cacheKey.value
     counts.value = data.counts
     page.value = data.page
     hasMore.value = data.hasMore
@@ -645,6 +1148,89 @@ const toggleSort = (key: ProxyGroupRulePenetrationSortKey) => {
 
   sortKey.value = null
   sortDirection.value = 'asc'
+}
+
+const toggleColumnSort = (column: DomainRuleColumn) => {
+  if (!column.sortable || column.key === 'drag') {
+    return
+  }
+
+  toggleSort(column.key)
+}
+
+const handleDragStart = () => {
+  if (!canReorderCustomRules.value) {
+    return
+  }
+
+  dragSnapshot.value = [...entries.value]
+  suppressRowClick.value = true
+}
+
+const releaseRowClick = () => {
+  window.setTimeout(() => {
+    suppressRowClick.value = false
+  }, 0)
+}
+
+const handleDragEnd = async (event: DragEndEvent) => {
+  if (
+    !canReorderCustomRules.value ||
+    event.oldIndex === undefined ||
+    event.newIndex === undefined ||
+    event.oldIndex === event.newIndex
+  ) {
+    dragSnapshot.value = []
+    releaseRowClick()
+    return
+  }
+
+  const previousEntries = dragSnapshot.value
+  isReordering.value = true
+
+  try {
+    const response = await fetchServerApi('/api/proxy-domain-rules/order', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        customGroupMode: getCustomGroupMode(selectedGroupName.value),
+        orderedRules: entries.value.map((item) => item.raw),
+      }),
+    })
+    const data = (await response.json().catch(() => null)) as {
+      message?: string
+      changed?: boolean
+    } | null
+
+    if (!response.ok) {
+      throw new Error(data?.message || `Failed to reorder custom rules: ${response.status}`)
+    }
+
+    if (data?.changed) {
+      domainRuleConfigChanged.value = true
+      cacheKey.value = ''
+    }
+
+    showNotification({
+      key: 'custom-rule-order-saved',
+      content: 'customRuleOrderSaved',
+      type: 'alert-success',
+    })
+  } catch (reorderError) {
+    console.error(reorderError)
+    entries.value = previousEntries
+    showNotification({
+      key: 'custom-rule-order-failed',
+      content: 'customRuleOrderFailed',
+      type: 'alert-error',
+    })
+  } finally {
+    dragSnapshot.value = []
+    isReordering.value = false
+    releaseRowClick()
+  }
 }
 
 watch(
@@ -717,6 +1303,7 @@ watch(
     sortKey,
     sortDirection,
     debouncedSearchRevision,
+    domainRulesReloadRevision,
   ],
   async ([groupName], [previousGroupName]) => {
     if (!groupName) {
@@ -773,6 +1360,37 @@ onBeforeUnmount(() => {
 
 .domain-penetration-table tbody tr:hover > td {
   background-color: var(--color-primary) !important;
+}
+
+.domain-penetration-table .domain-rule-editable-row,
+.domain-penetration-table .domain-rule-editable-row > td {
+  cursor: pointer !important;
+}
+
+.custom-rule-delete-button {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.domain-rule-row:hover .custom-rule-delete-button,
+.domain-rule-row:focus-within .custom-rule-delete-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .custom-rule-delete-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.domain-penetration-table :deep(.domain-rule-drag-ghost) > td {
+  opacity: 0.45;
+}
+
+.domain-penetration-table :deep(.domain-rule-drag-chosen) > td {
+  background-color: color-mix(in srgb, var(--color-primary) 18%, var(--color-base-100)) !important;
 }
 
 .domain-penetration-table thead th {

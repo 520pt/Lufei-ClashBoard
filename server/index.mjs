@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { Client as SshClient } from 'ssh2'
 import { WebSocket, WebSocketServer } from 'ws'
-import { parse as parseYaml } from 'yaml'
+import { isSeq as isYamlSeq, parse as parseYaml, parseDocument as parseYamlDocument } from 'yaml'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -25,6 +25,10 @@ const backgroundImageStorageKey = '__background_image__'
 const execFileAsync = promisify(execFile)
 const defaultOpenClashUciConfigPath = '/etc/config/openclash'
 const defaultOpenClashConfigDir = '/etc/openclash/config'
+const defaultOpenClashPreCustomRulesPath =
+  '/etc/openclash/custom/openclash_custom_rules.list'
+const defaultOpenClashPostCustomRulesPath =
+  '/etc/openclash/custom/openclash_custom_rules_2.list'
 const openClashUciConfigPath =
   process.env.ZASHBOARD_OPENCLASH_UCI_PATH ||
   process.env.OPENCLASH_UCI_PATH ||
@@ -3458,12 +3462,7 @@ const normalizeRuleTypeName = (value) => {
     .replace(/[^a-z0-9]/gi, '')
     .toUpperCase()
 
-  return (
-    RULE_TYPE_ALIAS_MAP.get(normalizedKey) ||
-    String(value || '')
-      .trim()
-      .toUpperCase()
-  )
+  return RULE_TYPE_ALIAS_MAP.get(normalizedKey) || String(value || '').trim().toUpperCase()
 }
 
 const getRuleEntryFamily = (type) => {
@@ -3471,7 +3470,9 @@ const getRuleEntryFamily = (type) => {
     return 'domain'
   }
 
-  if (['IP-CIDR', 'IP-CIDR6', 'SRC-IP', 'SRC-IP-CIDR', 'SRC-IP-CIDR6', 'GEOIP'].includes(type)) {
+  if (
+    ['IP-CIDR', 'IP-CIDR6', 'SRC-IP', 'SRC-IP-CIDR', 'SRC-IP-CIDR6', 'GEOIP'].includes(type)
+  ) {
     return 'ip'
   }
 
@@ -3485,7 +3486,9 @@ const getRuleEntryFamily = (type) => {
 const buildRuleEntry = (type, content, params = [], options = {}) => {
   const normalizedType = normalizeRuleTypeName(type)
   const normalizedContent = String(content || '').trim()
-  const normalizedParams = params.map((param) => String(param || '').trim()).filter(Boolean)
+  const normalizedParams = params
+    .map((param) => String(param || '').trim())
+    .filter(Boolean)
   const raw =
     options.raw ||
     [normalizedType, normalizedContent, ...normalizedParams].filter(Boolean).join(',')
@@ -3587,6 +3590,813 @@ const parseRuleEntriesFromBody = (body, source = '') => {
   return entries
 }
 
+const PROXY_DOMAIN_RULE_TYPES = new Set(['DOMAIN-SUFFIX', 'DOMAIN', 'DOMAIN-KEYWORD'])
+const PROXY_IP_RULE_TYPES = new Set(['IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'SRC-IP-CIDR6'])
+const PROXY_DIRECT_RULE_TYPES = new Set([...PROXY_DOMAIN_RULE_TYPES, ...PROXY_IP_RULE_TYPES])
+const PROXY_DOMAIN_RULE_INSERT_MODES = new Set(['append', 'before-types'])
+const PROXY_CUSTOM_GROUP_MODES = new Set(['pre', 'post'])
+
+const createBadRequestError = (message) => {
+  const error = new Error(message)
+  error.statusCode = 400
+  return error
+}
+
+const getErrorStatusCode = (error, fallback = 500) => {
+  const statusCode =
+    error && typeof error === 'object' && Number.isInteger(error.statusCode)
+      ? error.statusCode
+      : fallback
+
+  return statusCode >= 400 && statusCode < 600 ? statusCode : fallback
+}
+
+const normalizeProxyDomainRuleType = (value) => {
+  const normalizedType = normalizeRuleTypeName(value || 'DOMAIN-SUFFIX')
+
+  return PROXY_DIRECT_RULE_TYPES.has(normalizedType) ? normalizedType : 'DOMAIN-SUFFIX'
+}
+
+const normalizeProxyDomainRuleInsertMode = (value) => {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+
+  return PROXY_DOMAIN_RULE_INSERT_MODES.has(normalizedValue) ? normalizedValue : 'append'
+}
+
+const normalizeProxyDomainRuleBeforeTypes = (value) => {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+
+  return dedupeStrings(
+    values
+      .map((item) => normalizeRuleTypeName(item))
+      .filter(Boolean),
+  )
+}
+
+const getHostnameFromMaybeUrl = (value) => {
+  const normalizedValue = String(value || '').trim()
+
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedValue)) {
+    return normalizedValue
+  }
+
+  try {
+    return new URL(normalizedValue).hostname
+  } catch {
+    return normalizedValue
+  }
+}
+
+const normalizeProxyDomainRuleValue = (value, type) => {
+  const rawValue = getHostnameFromMaybeUrl(value)
+  const withoutWildcard = rawValue.replace(/^\*\./, '')
+  const normalizedValue =
+    type === 'DOMAIN-KEYWORD'
+      ? normalizeKeyword(withoutWildcard)
+      : normalizeDomain(withoutWildcard)
+
+  if (!normalizedValue) {
+    throw createBadRequestError('domain is required')
+  }
+
+  if (/[\s,\r\n]/.test(normalizedValue)) {
+    throw createBadRequestError('domain must not contain spaces or commas')
+  }
+
+  if (normalizedValue.length > 253) {
+    throw createBadRequestError('domain is too long')
+  }
+
+  return normalizedValue
+}
+
+const normalizeProxyIpRuleValue = (value, type) => {
+  const normalizedValue = String(value || '').trim()
+
+  if (!normalizedValue) {
+    throw createBadRequestError('ip is required')
+  }
+
+  if (/[\s,\r\n]/.test(normalizedValue)) {
+    throw createBadRequestError('ip must not contain spaces or commas')
+  }
+
+  const parsedCidr = parseIpCidr(normalizedValue)
+
+  if (!parsedCidr) {
+    throw createBadRequestError('ip must be a valid IP or CIDR')
+  }
+
+  if (
+    (type === 'IP-CIDR' || type === 'SRC-IP-CIDR') &&
+    parsedCidr.version !== 4
+  ) {
+    throw createBadRequestError('ip must be IPv4 for this rule type')
+  }
+
+  if (
+    (type === 'IP-CIDR6' || type === 'SRC-IP-CIDR6') &&
+    parsedCidr.version !== 6
+  ) {
+    throw createBadRequestError('ip must be IPv6 for this rule type')
+  }
+
+  return normalizedValue
+}
+
+const normalizeProxyDirectRuleValue = (value, type) => {
+  if (PROXY_IP_RULE_TYPES.has(type)) {
+    return normalizeProxyIpRuleValue(value, type)
+  }
+
+  return normalizeProxyDomainRuleValue(value, type)
+}
+
+const normalizeProxyDomainRuleTargetName = (value) => {
+  const targetName = String(value || '').trim()
+
+  if (!targetName) {
+    throw createBadRequestError('target is required')
+  }
+
+  if (/[\r\n,]/.test(targetName)) {
+    throw createBadRequestError('target must not contain line breaks or commas')
+  }
+
+  return targetName
+}
+
+const normalizeProxyCustomGroupMode = (value) => {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+
+  return PROXY_CUSTOM_GROUP_MODES.has(normalizedValue) ? normalizedValue : ''
+}
+
+const normalizeWritableProxyDomainRuleInput = (input = {}) => {
+  const customGroupMode = normalizeProxyCustomGroupMode(input.customGroupMode)
+
+  if (!customGroupMode) {
+    throw createBadRequestError('Domain rules can only be added to custom rule sections.')
+  }
+
+  return {
+    ...input,
+    groupName: '',
+    providerName: '',
+    customGroupMode,
+  }
+}
+
+const getWritableProxyDomainRulePath = (snapshot, customGroupMode) => {
+  if (snapshot?.plugin !== 'openclash') {
+    return snapshot?.configPath || ''
+  }
+
+  return customGroupMode === 'post'
+    ? defaultOpenClashPostCustomRulesPath
+    : defaultOpenClashPreCustomRulesPath
+}
+
+const normalizeProxyDomainRuleInput = (input = {}) => {
+  const type = normalizeProxyDomainRuleType(input.type)
+  const value = normalizeProxyDirectRuleValue(input.value || input.domain, type)
+  const groupName = String(input.groupName || input.policy || '').trim()
+  const customGroupMode = normalizeProxyCustomGroupMode(input.customGroupMode)
+  const target = normalizeProxyDomainRuleTargetName(
+    input.target || input.param || (customGroupMode ? '' : groupName),
+  )
+  const providerName = String(input.providerName || '').trim()
+  const insertMode = normalizeProxyDomainRuleInsertMode(input.insertMode)
+  const beforeTypes = normalizeProxyDomainRuleBeforeTypes(input.beforeTypes)
+  const rule = `${type},${value},${target}`
+
+  return {
+    type,
+    value,
+    groupName,
+    target,
+    providerName,
+    customGroupMode,
+    insertMode,
+    beforeTypes,
+    rule,
+  }
+}
+
+const getYamlRuleItemValue = (item) => {
+  if (!item || typeof item !== 'object') {
+    return ''
+  }
+
+  if (typeof item.value === 'string') {
+    return item.value
+  }
+
+  return ''
+}
+
+const getYamlRuleItemType = (item) => {
+  const value = getYamlRuleItemValue(item)
+
+  if (!value) {
+    return ''
+  }
+
+  return normalizeRuleTypeName(value.split(',')[0])
+}
+
+const getComparableProxyDomainRule = (value) => {
+  const parts = String(value || '')
+    .split(',')
+    .map((part) => part.trim())
+
+  const type = normalizeRuleTypeName(parts[0])
+
+  if (!PROXY_DIRECT_RULE_TYPES.has(type) || !parts[1] || !parts[2]) {
+    return ''
+  }
+
+  try {
+    return [
+      type,
+      normalizeProxyDirectRuleValue(parts[1], type),
+      normalizeProxyDomainRuleTargetName(parts[2]),
+    ].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+const getYamlRuleItemParts = (item) =>
+  getYamlRuleItemValue(item)
+    .split(',')
+    .map((part) => part.trim())
+
+const getProxyDomainRuleInsertIndex = (rulesNode, options) => {
+  if (options.customGroupMode === 'pre') {
+    const firstRuleSetIndex = rulesNode.items.findIndex(
+      (item) => getYamlRuleItemType(item) === 'RULE-SET',
+    )
+
+    return firstRuleSetIndex >= 0 ? firstRuleSetIndex : 0
+  }
+
+  if (options.customGroupMode === 'post') {
+    const lastRuleSetIndex = rulesNode.items.reduce((matchedIndex, item, index) => {
+      return getYamlRuleItemType(item) === 'RULE-SET' ? index : matchedIndex
+    }, -1)
+
+    return lastRuleSetIndex >= 0 ? lastRuleSetIndex + 1 : rulesNode.items.length
+  }
+
+  if (options.providerName && options.groupName) {
+    const matchedProviderIndex = rulesNode.items.findIndex((item) => {
+      const [type, providerName, targetName] = getYamlRuleItemParts(item)
+
+      return (
+        normalizeRuleTypeName(type) === 'RULE-SET' &&
+        providerName === options.providerName &&
+        targetName === options.groupName
+      )
+    })
+
+    if (matchedProviderIndex >= 0) {
+      return matchedProviderIndex
+    }
+  }
+
+  if (options.groupName) {
+    const matchedGroupIndex = rulesNode.items.findIndex((item) => {
+      const [type, , targetName] = getYamlRuleItemParts(item)
+
+      return normalizeRuleTypeName(type) === 'RULE-SET' && targetName === options.groupName
+    })
+
+    if (matchedGroupIndex >= 0) {
+      return matchedGroupIndex
+    }
+  }
+
+  if (options.insertMode !== 'before-types' || options.beforeTypes.length === 0) {
+    return rulesNode.items.length
+  }
+
+  const beforeTypeSet = new Set(options.beforeTypes)
+  const matchedIndex = rulesNode.items.findIndex((item) =>
+    beforeTypeSet.has(getYamlRuleItemType(item)),
+  )
+
+  return matchedIndex >= 0 ? matchedIndex : rulesNode.items.length
+}
+
+const addProxyDomainRuleToYamlContent = (content, input = {}) => {
+  const normalizedInput = normalizeProxyDomainRuleInput(input)
+  const document = parseYamlDocument(String(content || ''))
+
+  if (document.errors.length > 0) {
+    throw new Error(document.errors.map((error) => error.message).join('; '))
+  }
+
+  let rulesNode = document.get('rules', true)
+
+  if (!rulesNode) {
+    document.set('rules', document.createNode([]))
+    rulesNode = document.get('rules', true)
+  }
+
+  if (!isYamlSeq(rulesNode)) {
+    throw new Error('YAML rules must be an array.')
+  }
+
+  const targetComparableRule = getComparableProxyDomainRule(normalizedInput.rule)
+  const existingRule = rulesNode.items.some(
+    (item) => getComparableProxyDomainRule(getYamlRuleItemValue(item)) === targetComparableRule,
+  )
+
+  if (existingRule) {
+    return {
+      changed: false,
+      duplicated: true,
+      content: String(content || ''),
+      rule: normalizedInput.rule,
+      insertMode: normalizedInput.insertMode,
+      beforeTypes: normalizedInput.beforeTypes,
+    }
+  }
+
+  const insertIndex = getProxyDomainRuleInsertIndex(rulesNode, normalizedInput)
+  rulesNode.items.splice(insertIndex, 0, document.createNode(normalizedInput.rule))
+
+  return {
+    changed: true,
+    duplicated: false,
+    content: String(document),
+    rule: normalizedInput.rule,
+    insertMode: normalizedInput.insertMode,
+    beforeTypes: normalizedInput.beforeTypes,
+  }
+}
+
+const updateProxyDomainRuleInYamlContent = (content, originalRule, input = {}) => {
+  const normalizedInput = normalizeProxyDomainRuleInput(input)
+  const normalizedOriginalRule = normalizeOrderedProxyDomainRule(originalRule)
+
+  if (!normalizedOriginalRule) {
+    throw createBadRequestError('originalRule is required')
+  }
+
+  const document = parseYamlDocument(String(content || ''))
+
+  if (document.errors.length > 0) {
+    throw new Error(document.errors.map((error) => error.message).join('; '))
+  }
+
+  const rulesNode = document.get('rules', true)
+
+  if (!isYamlSeq(rulesNode)) {
+    throw new Error('YAML rules must be an array.')
+  }
+
+  const matchedItemIndex = rulesNode.items.findIndex(
+    (item) => normalizeOrderedProxyDomainRule(getYamlRuleItemValue(item)) === normalizedOriginalRule,
+  )
+
+  if (matchedItemIndex < 0) {
+    throw createBadRequestError('Original custom rule was not found')
+  }
+
+  const matchedItem = rulesNode.items[matchedItemIndex]
+
+  if (!Array.isArray(matchedItem?.range)) {
+    throw new Error('Original custom rule cannot be edited')
+  }
+
+  const updatedComparableRule = getComparableProxyDomainRule(normalizedInput.rule)
+  const duplicated = rulesNode.items.some((item, index) => {
+    return (
+      index !== matchedItemIndex &&
+      getComparableProxyDomainRule(getYamlRuleItemValue(item)) === updatedComparableRule
+    )
+  })
+
+  if (duplicated) {
+    throw createBadRequestError('Updated custom rule already exists')
+  }
+
+  if (normalizeOrderedProxyDomainRule(normalizedInput.rule) === normalizedOriginalRule) {
+    return {
+      changed: false,
+      content: String(content || ''),
+      originalRule: normalizedOriginalRule,
+      rule: normalizedInput.rule,
+    }
+  }
+
+  const updatedContent =
+    String(content || '').slice(0, matchedItem.range[0]) +
+    normalizedInput.rule +
+    String(content || '').slice(matchedItem.range[1])
+  const verifiedDocument = parseYamlDocument(updatedContent)
+
+  if (verifiedDocument.errors.length > 0) {
+    throw new Error(verifiedDocument.errors.map((error) => error.message).join('; '))
+  }
+
+  return {
+    changed: true,
+    content: updatedContent,
+    originalRule: normalizedOriginalRule,
+    rule: normalizedInput.rule,
+  }
+}
+
+const deleteProxyDomainRuleInYamlContent = (content, rule) => {
+  const sourceContent = String(content || '')
+  const normalizedRule = normalizeOrderedProxyDomainRule(rule)
+
+  if (!normalizedRule) {
+    throw createBadRequestError('rule is required')
+  }
+
+  const document = parseYamlDocument(sourceContent)
+
+  if (document.errors.length > 0) {
+    throw new Error(document.errors.map((error) => error.message).join('; '))
+  }
+
+  const rulesNode = document.get('rules', true)
+
+  if (!isYamlSeq(rulesNode)) {
+    throw new Error('YAML rules must be an array.')
+  }
+
+  const matchedItem = rulesNode.items.find(
+    (item) => normalizeOrderedProxyDomainRule(getYamlRuleItemValue(item)) === normalizedRule,
+  )
+
+  if (!Array.isArray(matchedItem?.range)) {
+    throw createBadRequestError('Custom rule was not found')
+  }
+
+  const lineStart = sourceContent.lastIndexOf('\n', Math.max(0, matchedItem.range[0] - 1)) + 1
+  const newlineIndex = sourceContent.indexOf('\n', matchedItem.range[1])
+  const lineEnd = newlineIndex >= 0 ? newlineIndex + 1 : sourceContent.length
+  const itemPrefix = sourceContent.slice(lineStart, matchedItem.range[0])
+
+  if (!/^\s*-\s*$/.test(itemPrefix)) {
+    throw new Error('Custom rule is not stored as an editable YAML list item')
+  }
+
+  const updatedContent = sourceContent.slice(0, lineStart) + sourceContent.slice(lineEnd)
+  const verifiedDocument = parseYamlDocument(updatedContent)
+
+  if (verifiedDocument.errors.length > 0) {
+    throw new Error(verifiedDocument.errors.map((error) => error.message).join('; '))
+  }
+
+  return {
+    changed: true,
+    content: updatedContent,
+    rule: normalizedRule,
+  }
+}
+
+const normalizeOrderedProxyDomainRule = (value) =>
+  String(value || '')
+    .split(',')
+    .map((part) => part.trim())
+    .join(',')
+
+const buildProxyDomainRuleCounts = (rules) => {
+  const counts = new Map()
+
+  rules.forEach((rule) => {
+    const normalizedRule = normalizeOrderedProxyDomainRule(rule)
+    counts.set(normalizedRule, (counts.get(normalizedRule) || 0) + 1)
+  })
+
+  return counts
+}
+
+const reorderProxyDomainRulesInYamlContent = (content, orderedRules = []) => {
+  if (!Array.isArray(orderedRules) || orderedRules.some((rule) => typeof rule !== 'string')) {
+    throw createBadRequestError('orderedRules must be an array of strings')
+  }
+
+  const document = parseYamlDocument(String(content || ''))
+
+  if (document.errors.length > 0) {
+    throw new Error(document.errors.map((error) => error.message).join('; '))
+  }
+
+  const rulesNode = document.get('rules', true)
+
+  if (!isYamlSeq(rulesNode)) {
+    throw new Error('YAML rules must be an array.')
+  }
+
+  const ruleItems = rulesNode.items.filter(
+    (item) => typeof item?.value === 'string' && Array.isArray(item.range),
+  )
+  const currentRules = ruleItems.map((item) => String(item.value))
+
+  if (orderedRules.length !== currentRules.length) {
+    throw createBadRequestError('orderedRules must contain every enabled custom rule')
+  }
+
+  const currentCounts = buildProxyDomainRuleCounts(currentRules)
+  const orderedCounts = buildProxyDomainRuleCounts(orderedRules)
+
+  if (
+    currentCounts.size !== orderedCounts.size ||
+    [...currentCounts].some(([rule, count]) => orderedCounts.get(rule) !== count)
+  ) {
+    throw createBadRequestError('orderedRules must be a permutation of the current custom rules')
+  }
+
+  const changed = currentRules.some(
+    (rule, index) =>
+      normalizeOrderedProxyDomainRule(rule) !==
+      normalizeOrderedProxyDomainRule(orderedRules[index]),
+  )
+
+  if (!changed) {
+    return {
+      changed: false,
+      content: String(content || ''),
+      count: currentRules.length,
+    }
+  }
+
+  let updatedContent = String(content || '')
+  const replacements = ruleItems.map((item, index) => ({
+    start: item.range[0],
+    end: item.range[1],
+    value: normalizeOrderedProxyDomainRule(orderedRules[index]),
+  }))
+
+  replacements
+    .sort((left, right) => right.start - left.start)
+    .forEach((replacement) => {
+      updatedContent =
+        updatedContent.slice(0, replacement.start) +
+        replacement.value +
+        updatedContent.slice(replacement.end)
+    })
+
+  const verifiedDocument = parseYamlDocument(updatedContent)
+
+  if (verifiedDocument.errors.length > 0) {
+    throw new Error(verifiedDocument.errors.map((error) => error.message).join('; '))
+  }
+
+  return {
+    changed: true,
+    content: updatedContent,
+    count: currentRules.length,
+  }
+}
+
+const addProxyDomainRuleToRemoteConfig = async (input = {}) => {
+  const normalizedInput = normalizeProxyDomainRuleInput(
+    normalizeWritableProxyDomainRuleInput(input),
+  )
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    throw createRuleSourceSshRequiredError()
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+      const configPath = getWritableProxyDomainRulePath(
+        snapshot,
+        normalizedInput.customGroupMode,
+      )
+      const content = (await remoteFileExists(client, configPath))
+        ? await readRemoteFile(client, configPath)
+        : 'rules:\n'
+      const result = addProxyDomainRuleToYamlContent(content, normalizedInput)
+
+      if (result.changed) {
+        await writeRemoteFile(client, configPath, result.content)
+        proxyGroupRulePenetrationCache.clear()
+        proxyGroupRulePenetrationCacheBySignature.clear()
+      }
+
+      return {
+        ok: true,
+        changed: result.changed,
+        duplicated: result.duplicated,
+        rule: result.rule,
+        plugin: snapshot.plugin,
+        configPath,
+        sourceConfigPath: snapshot.configPath,
+        insertMode: result.insertMode,
+        beforeTypes: result.beforeTypes,
+      }
+    })
+  } catch (error) {
+    if (getErrorStatusCode(error, 0) === 400) {
+      throw error
+    }
+
+    throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
+}
+
+const updateProxyDomainRuleOnOpenWrt = async (input = {}) => {
+  const writableInput = normalizeWritableProxyDomainRuleInput(input)
+  const normalizedInput = normalizeProxyDomainRuleInput(writableInput)
+  const originalRule = String(input.originalRule || '').trim()
+
+  if (!originalRule) {
+    throw createBadRequestError('originalRule is required')
+  }
+
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    throw createRuleSourceSshRequiredError()
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+      const configPath = getWritableProxyDomainRulePath(
+        snapshot,
+        normalizedInput.customGroupMode,
+      )
+      const content = await readRemoteFile(client, configPath)
+      const result = updateProxyDomainRuleInYamlContent(content, originalRule, normalizedInput)
+
+      if (result.changed) {
+        await writeRemoteFile(client, configPath, result.content)
+        proxyGroupRulePenetrationCache.clear()
+        proxyGroupRulePenetrationCacheBySignature.clear()
+      }
+
+      return {
+        ok: true,
+        changed: result.changed,
+        originalRule: result.originalRule,
+        rule: result.rule,
+        plugin: snapshot.plugin,
+        configPath,
+      }
+    })
+  } catch (error) {
+    if (getErrorStatusCode(error, 0) === 400) {
+      throw error
+    }
+
+    throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
+}
+
+const deleteProxyDomainRuleOnOpenWrt = async (input = {}) => {
+  const customGroupMode = normalizeProxyCustomGroupMode(input.customGroupMode)
+  const rule = String(input.rule || '').trim()
+
+  if (!customGroupMode) {
+    throw createBadRequestError('Custom rule section is required')
+  }
+
+  if (!rule) {
+    throw createBadRequestError('rule is required')
+  }
+
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    throw createRuleSourceSshRequiredError()
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+      const configPath = getWritableProxyDomainRulePath(snapshot, customGroupMode)
+      const content = await readRemoteFile(client, configPath)
+      const result = deleteProxyDomainRuleInYamlContent(content, rule)
+
+      await writeRemoteFile(client, configPath, result.content)
+      proxyGroupRulePenetrationCache.clear()
+      proxyGroupRulePenetrationCacheBySignature.clear()
+
+      return {
+        ok: true,
+        changed: true,
+        rule: result.rule,
+        plugin: snapshot.plugin,
+        configPath,
+      }
+    })
+  } catch (error) {
+    if (getErrorStatusCode(error, 0) === 400) {
+      throw error
+    }
+
+    throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
+}
+
+const reloadProxyDomainRulesOnOpenWrt = async () => {
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    throw createRuleSourceSshRequiredError()
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+      const servicePath =
+        snapshot.plugin === 'nikki' ? '/etc/init.d/nikki' : '/etc/init.d/openclash'
+
+      if (!(await remotePathExists(client, servicePath))) {
+        throw new Error(`Rule source service does not exist: ${servicePath}`)
+      }
+
+      const result = await sshExec(client, `${shellQuote(servicePath)} restart`, {
+        maxBuffer: 2 * 1024 * 1024,
+      })
+
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || `Failed to restart ${snapshot.plugin}`)
+      }
+
+      proxyGroupRulePenetrationCache.clear()
+      proxyGroupRulePenetrationCacheBySignature.clear()
+
+      return {
+        ok: true,
+        plugin: snapshot.plugin,
+        configPath: snapshot.configPath,
+      }
+    })
+  } catch (error) {
+    if (getErrorStatusCode(error, 0) === 400) {
+      throw error
+    }
+
+    throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
+}
+
+const reorderProxyDomainRulesOnOpenWrt = async (input = {}) => {
+  const customGroupMode = normalizeProxyCustomGroupMode(input.customGroupMode)
+
+  if (!customGroupMode) {
+    throw createBadRequestError('Custom rule section is required')
+  }
+
+  const orderedRules = Array.isArray(input.orderedRules) ? input.orderedRules : null
+
+  if (!orderedRules) {
+    throw createBadRequestError('orderedRules is required')
+  }
+
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    throw createRuleSourceSshRequiredError()
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+      const configPath = getWritableProxyDomainRulePath(snapshot, customGroupMode)
+      const content = await readRemoteFile(client, configPath)
+      const result = reorderProxyDomainRulesInYamlContent(content, orderedRules)
+
+      if (result.changed) {
+        await writeRemoteFile(client, configPath, result.content)
+        proxyGroupRulePenetrationCache.clear()
+        proxyGroupRulePenetrationCacheBySignature.clear()
+      }
+
+      return {
+        ok: true,
+        changed: result.changed,
+        count: result.count,
+        plugin: snapshot.plugin,
+        configPath,
+      }
+    })
+  } catch (error) {
+    if (getErrorStatusCode(error, 0) === 400) {
+      throw error
+    }
+
+    throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
+}
+
 const isRuleEnabled = (rule) => {
   if (rule?.extra) {
     return !rule.extra.disabled
@@ -3648,6 +4458,105 @@ const isProxyGroupCustomDirectRule = (normalizedType) => {
     normalizedType !== 'MATCH' &&
     normalizedType !== 'FINAL',
   )
+}
+
+const parseProxyDomainCustomRulesFromYamlContent = (
+  content,
+  customGroupMode = 'pre',
+  options = {},
+) => {
+  const sourceContent = String(content || '')
+  const document = parseYamlDocument(sourceContent)
+
+  if (document.errors.length > 0) {
+    throw new Error(document.errors.map((error) => error.message).join('; '))
+  }
+
+  const rulesNode = document.get('rules', true)
+
+  if (!isYamlSeq(rulesNode)) {
+    throw new Error('YAML rules must be an array.')
+  }
+
+  const entries = []
+  let hasSeenRuleSet = false
+
+  rulesNode.items.forEach((item) => {
+    const value = getYamlRuleItemValue(item)
+    const normalizedType = getYamlRuleItemType(item)
+
+    if (normalizedType === 'RULE-SET') {
+      hasSeenRuleSet = true
+      return
+    }
+
+    if (!value || !isProxyGroupCustomDirectRule(normalizedType)) {
+      return
+    }
+
+    if (!options.standalone) {
+      const itemMode = hasSeenRuleSet ? 'post' : 'pre'
+
+      if (itemMode !== customGroupMode) {
+        return
+      }
+    }
+
+    const line = Array.isArray(item?.range)
+      ? sourceContent.slice(0, item.range[0]).split(/\r?\n/).length
+      : null
+    const entry = parseRuleEntryFromTextLine(value, line, options.source || 'custom')
+
+    if (entry) {
+      entries.push(entry)
+    }
+  })
+
+  return entries
+}
+
+const readProxyDomainCustomRulesOnOpenWrt = async (customGroupMode) => {
+  const normalizedCustomGroupMode = normalizeProxyCustomGroupMode(customGroupMode)
+
+  if (!normalizedCustomGroupMode) {
+    throw createBadRequestError('Custom rule section is required')
+  }
+
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    throw createRuleSourceSshRequiredError()
+  }
+
+  try {
+    return await withOpenWrtSshClient(config, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, config.plugin)
+      const configPath = getWritableProxyDomainRulePath(snapshot, normalizedCustomGroupMode)
+      const content = (await remoteFileExists(client, configPath))
+        ? await readRemoteFile(client, configPath)
+        : 'rules:\n'
+      const items = parseProxyDomainCustomRulesFromYamlContent(
+        content,
+        normalizedCustomGroupMode,
+        {
+          source: configPath,
+          standalone: snapshot.plugin === 'openclash',
+        },
+      )
+
+      return {
+        plugin: snapshot.plugin,
+        configPath,
+        items,
+      }
+    })
+  } catch (error) {
+    if (getErrorStatusCode(error, 0) === 400) {
+      throw error
+    }
+
+    throw createRuleSourceSshRequiredError(getErrorMessage(error))
+  }
 }
 
 const expandProxyGroupRuleEntries = (groupName, rules, options = {}) => {
@@ -5685,6 +6594,7 @@ app.use('/api/rule-provider-penetration', express.json({ limit: '2kb' }))
 app.use('/api/rule-provider-search', express.json({ limit: '128kb' }))
 app.use('/api/storage', express.json({ limit: '25mb' }))
 app.use('/api/openwrt-rule-source', express.json({ limit: '8kb' }))
+app.use('/api/proxy-domain-rules', express.json({ limit: '8kb' }))
 app.use('/api/background-image', express.json({ limit: '25mb' }))
 app.use('/api/custom-rules', express.json({ limit: '64kb' }))
 app.use('/api/proxy-group-rule-penetration', express.json({ limit: '5mb' }))
@@ -6108,7 +7018,62 @@ app.post('/api/rule-provider-penetration', (req, res) => {
   }
 })
 
-app.post('/api/proxy-group-rule-penetration', (req, res) => {
+app.post('/api/proxy-domain-rules', async (req, res) => {
+  try {
+    res.json(await addProxyDomainRuleToRemoteConfig(req.body || {}))
+  } catch (error) {
+    res.status(getErrorStatusCode(error)).json({
+      code: getErrorCode(error),
+      message: getLocalizedErrorMessage(error, req),
+    })
+  }
+})
+
+app.put('/api/proxy-domain-rules', async (req, res) => {
+  try {
+    res.json(await updateProxyDomainRuleOnOpenWrt(req.body || {}))
+  } catch (error) {
+    res.status(getErrorStatusCode(error)).json({
+      code: getErrorCode(error),
+      message: getLocalizedErrorMessage(error, req),
+    })
+  }
+})
+
+app.delete('/api/proxy-domain-rules', async (req, res) => {
+  try {
+    res.json(await deleteProxyDomainRuleOnOpenWrt(req.body || {}))
+  } catch (error) {
+    res.status(getErrorStatusCode(error)).json({
+      code: getErrorCode(error),
+      message: getLocalizedErrorMessage(error, req),
+    })
+  }
+})
+
+app.post('/api/proxy-domain-rules/reload', async (req, res) => {
+  try {
+    res.json(await reloadProxyDomainRulesOnOpenWrt())
+  } catch (error) {
+    res.status(getErrorStatusCode(error)).json({
+      code: getErrorCode(error),
+      message: getLocalizedErrorMessage(error, req),
+    })
+  }
+})
+
+app.put('/api/proxy-domain-rules/order', async (req, res) => {
+  try {
+    res.json(await reorderProxyDomainRulesOnOpenWrt(req.body || {}))
+  } catch (error) {
+    res.status(getErrorStatusCode(error)).json({
+      code: getErrorCode(error),
+      message: getLocalizedErrorMessage(error, req),
+    })
+  }
+})
+
+app.post('/api/proxy-group-rule-penetration', async (req, res) => {
   const groupName = typeof req.body?.groupName === 'string' ? req.body.groupName.trim() : ''
   const cacheKey = typeof req.body?.cacheKey === 'string' ? req.body.cacheKey.trim() : ''
   const rules = Array.isArray(req.body?.rules) ? req.body.rules : null
@@ -6132,7 +7097,7 @@ app.post('/api/proxy-group-rule-penetration', (req, res) => {
     return
   }
 
-  if (!cacheKey && !Array.isArray(rules)) {
+  if (!customGroup && !cacheKey && !Array.isArray(rules)) {
     res.status(400).json({
       message: 'rules must be an array when cacheKey is missing',
     })
@@ -6140,20 +7105,25 @@ app.post('/api/proxy-group-rule-penetration', (req, res) => {
   }
 
   try {
-    const cacheEntry = getProxyGroupRulePenetrationCacheEntry({
-      groupName,
-      cacheKey,
-      rules: rules || [],
-      customGroup,
-      customGroupMode,
-    })
-    const scopedEntries = providerName
-      ? cacheEntry.items.filter((entry) => {
-          return providerName === 'controller'
-            ? entry.source === 'controller'
-            : entry.source === providerName
+    const remoteCustomRules =
+      customGroupMode === 'pre' || customGroupMode === 'post'
+        ? await readProxyDomainCustomRulesOnOpenWrt(customGroupMode)
+        : null
+    const cacheEntry = remoteCustomRules
+      ? null
+      : getProxyGroupRulePenetrationCacheEntry({
+          groupName,
+          cacheKey,
+          rules: rules || [],
+          customGroup,
+          customGroupMode,
         })
-      : cacheEntry.items
+    const sourceEntries = remoteCustomRules?.items || cacheEntry.items
+    const scopedEntries = providerName
+      ? sourceEntries.filter((entry) => {
+          return providerName === 'controller' ? entry.source === 'controller' : entry.source === providerName
+        })
+      : sourceEntries
     const searchMatchedEntries = scopedEntries.filter((entry) =>
       matchesProxyGroupRulePenetrationSearch(entry, search),
     )
@@ -6172,16 +7142,17 @@ app.post('/api/proxy-group-rule-penetration', (req, res) => {
     const end = start + pageSize
 
     res.json({
-      cacheKey: cacheEntry.cacheKey,
+      cacheKey: cacheEntry?.cacheKey || '',
       groupName,
       customGroup,
       customGroupMode,
       providerName,
-      totalRules: cacheEntry.totalRules,
+      totalRules: remoteCustomRules?.items.length ?? cacheEntry.totalRules,
       totalMatched: tabMatchedEntries.length,
       counts,
       items: sortedEntries.slice(start, end),
-      missingProviders: cacheEntry.missingProviders,
+      missingProviders: cacheEntry?.missingProviders || [],
+      configPath: remoteCustomRules?.configPath || '',
       page,
       pageSize,
       hasMore: end < sortedEntries.length,
@@ -6194,8 +7165,9 @@ app.post('/api/proxy-group-rule-penetration', (req, res) => {
       return
     }
 
-    res.status(500).json({
-      message: error instanceof Error ? error.message : String(error),
+    res.status(getErrorStatusCode(error)).json({
+      code: getErrorCode(error),
+      message: getLocalizedErrorMessage(error, req),
     })
   }
 })
@@ -6523,12 +7495,14 @@ export {
   ACCESS_PASSWORD_REQUIRED_CODE,
   addCustomRule,
   addCustomRules,
+  addProxyDomainRuleToYamlContent as addProxyDomainRuleToYamlContentForTesting,
   app,
   applyCustomRuleProviderToYamlContent as applyCustomRuleProviderToYamlContentForTesting,
   buildCustomRuleSnippets,
   buildPublicCustomRuleUrl as buildPublicCustomRuleUrlForTesting,
   CLASH_CONTROLLER_DISCOVERY_PORTS as clashControllerDiscoveryPortsForTesting,
   createAccessSessionToken as createAccessSessionTokenForTesting,
+  deleteProxyDomainRuleInYamlContent as deleteProxyDomainRuleInYamlContentForTesting,
   db,
   deleteCustomRule as deleteCustomRuleForTesting,
   extractOpenWrtVisibleClientIpv4 as extractOpenWrtVisibleClientIpv4ForTesting,
@@ -6544,12 +7518,16 @@ export {
   getRemoteYamlBackupCleanupCommand as getRemoteYamlBackupCleanupCommandForTesting,
   getRemoteYamlBackupPath as getRemoteYamlBackupPathForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
+  getWritableProxyDomainRulePath as getWritableProxyDomainRulePathForTesting,
   isLikelyClashControllerResult as isLikelyClashControllerResultForTesting,
   makeCustomRule,
+  normalizeWritableProxyDomainRuleInput as normalizeWritableProxyDomainRuleInputForTesting,
+  parseProxyDomainCustomRulesFromYamlContent as parseProxyDomainCustomRulesFromYamlContentForTesting,
   readCustomRuleListText,
   readCustomRules,
   readCustomRulesSettings,
   readSnapshot,
+  reorderProxyDomainRulesInYamlContent as reorderProxyDomainRulesInYamlContentForTesting,
   replaceCustomRulesText as replaceCustomRulesTextForTesting,
   replaceSnapshot as replaceManagedSnapshotForTesting,
   replaceSnapshotForTesting as replaceSnapshot,
@@ -6562,5 +7540,6 @@ export {
   shutdownServer,
   startServer,
   syncCustomRuleProvidersToCache as syncCustomRuleProvidersToCacheForTesting,
+  updateProxyDomainRuleInYamlContent as updateProxyDomainRuleInYamlContentForTesting,
   updateCustomRulesSettings,
 }
